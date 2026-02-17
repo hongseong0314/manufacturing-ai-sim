@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# Conda
+.conda/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data files
+data/
+*.csv
+*.json
+*.parquet
+*.pkl
+*.pickle
+
+# Environment variables
+.env
+
+# Other
+.DS_Store
+*.log

@@ -33,8 +33,8 @@ def test_deterministic_mode():
         'deterministic_mode': True,
         'scheduler_B': 'rule-based',  # Rule-Based 스케줄러
         'packing_C': 'greedy',         # Greedy 팩커
-        'N_pack': 4,                   # 한 팩 4개 Task
-        'min_queue_size': 8,
+        'batch_size_C': 4,             # 한 팩 4개 Task
+        'min_queue_size': 4,
         'max_wait_time': 30,
     }
     
@@ -88,7 +88,7 @@ def test_stochastic_mode():
         'deterministic_mode': False,  # Stochastic
         'scheduler_B': 'rule-based',
         'packing_C': 'greedy',
-        'N_pack': 4,
+        'batch_size_C': 4,
     }
     
     env = ManufacturingEnv(env_config)
@@ -151,7 +151,7 @@ def test_scheduler_comparison():
             'deterministic_mode': True,
             'scheduler_B': scheduler_type,
             'packing_C': 'greedy',
-            'N_pack': 4,
+            'batch_size_C': 4,
         }
         
         env = ManufacturingEnv(env_config)
@@ -201,7 +201,7 @@ def test_packer_comparison():
             'deterministic_mode': True,
             'scheduler_B': 'rule-based',
             'packing_C': packer_type,
-            'N_pack': 4,
+            'batch_size_C': 4,
         }
         
         env = ManufacturingEnv(env_config)

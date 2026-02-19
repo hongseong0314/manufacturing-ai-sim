@@ -3,6 +3,11 @@
 다중 공정(`A -> B -> C`) 배치 스케줄링 시뮬레이터입니다.  
 현재 기준으로 이벤트 로그 기반 검증과 Gantt 시각화가 정리되어 있습니다.
 
+## 프로세스 플로우
+아래 다이어그램은 시뮬레이션 프로세스 흐름입니다.
+
+![Simulation Process Flow](docs/figures/process_flow.png)
+
 ## 현재 핵심 동작
 - 공정 오케스트레이션: `A -> B -> C` same-step handoff
 - 환경 리셋 옵션:

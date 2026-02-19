@@ -112,7 +112,7 @@ def simulate_with_tracking(max_steps=150):
         'deterministic_mode': True,
         'scheduler_B': 'rule-based',
         'packing_C': 'greedy',
-        'N_pack': 4,
+        'batch_size_C': 4,
     }
     
     env = ManufacturingEnv(env_config)

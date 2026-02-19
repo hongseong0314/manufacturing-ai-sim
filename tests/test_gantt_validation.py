@@ -42,6 +42,14 @@ def _generate_initial_tasks(env: ManufacturingEnv, count: int, current_time: int
     return selected
 
 
+def _set_tight_spec_a(tasks, low: float, high: float):
+    """Apply the same tight A-spec to all tasks."""
+    low_f = float(low)
+    high_f = float(high)
+    for task in tasks:
+        task.spec_a = (low_f, high_f)
+
+
 def _machine_order_and_y(env_a, env_b, env_c):
     machines = []
     for _, machine in sorted(env_a.machines.items()):
@@ -50,6 +58,7 @@ def _machine_order_and_y(env_a, env_b, env_c):
         machines.append(str(machine.id))
     for _, machine in sorted(env_c.machines.items()):
         machines.append(str(machine.id))
+    machines.append("C_QUEUE")
     y_map = {machine_id: i for i, machine_id in enumerate(machines)}
     return machines, y_map
 
@@ -103,6 +112,69 @@ def _build_intervals(env_a, env_b, env_c):
                 "stack_index": idx,
                 "stack_size": max(1, len(task_uids)),
             })
+
+    # C queue/wait timeline boxes for clearer in-progress visibility.
+    c_queue_start = {}
+    c_pack_end = {}
+    final_time = max(
+        [
+            int(e.get("end_time", e.get("start_time", e.get("timestamp", 0))))
+            for e in events
+        ],
+        default=0,
+    ) + 1
+
+    for event in events:
+        event_type = event.get("event_type")
+        if event_type == "task_queued":
+            start_time = int(event.get("start_time", event.get("timestamp", 0)))
+            for uid in event.get("task_uids", []):
+                if uid not in c_queue_start:
+                    c_queue_start[uid] = start_time
+        elif event_type == "pack_completed":
+            end_time = int(event.get("end_time", event.get("timestamp", 0)))
+            for uid in event.get("task_uids", []):
+                c_pack_end[uid] = end_time
+
+    wait_rows = []
+    for uid, start_time in c_queue_start.items():
+        end_time = c_pack_end.get(uid, final_time)
+        if end_time <= start_time:
+            end_time = start_time + 1
+        wait_rows.append({
+            "task_uid": uid,
+            "start": start_time,
+            "end": end_time,
+        })
+
+    wait_rows.sort(key=lambda row: (row["start"], row["end"], row["task_uid"]))
+    lane_ends = []
+    lane_map = {}
+    for row in wait_rows:
+        assigned_lane = None
+        for lane_idx, lane_end in enumerate(lane_ends):
+            if row["start"] >= lane_end:
+                assigned_lane = lane_idx
+                lane_ends[lane_idx] = row["end"]
+                break
+        if assigned_lane is None:
+            lane_ends.append(row["end"])
+            assigned_lane = len(lane_ends) - 1
+        lane_map[row["task_uid"]] = assigned_lane
+
+    total_lanes = max(1, len(lane_ends))
+    for row in wait_rows:
+        intervals.append({
+            "machine_id": "C_QUEUE",
+            "start": row["start"],
+            "duration": row["end"] - row["start"],
+            "task_uid": row["task_uid"],
+            "label": f"{row['task_uid']}",
+            "event_type": "pack_wait",
+            "task_type": "in_progress",
+            "stack_index": lane_map[row["task_uid"]],
+            "stack_size": total_lanes,
+        })
     return intervals
 
 
@@ -127,6 +199,7 @@ def draw_gantt_from_events(env_a, env_b, env_c, output_path: Path, title: str):
         "packed": "#54A24B",
         "task_assigned": "#4C78A8",
         "pack_completed": "#54A24B",
+        "pack_wait": "#F28E2B",
     }
 
     for item in intervals:
@@ -174,6 +247,7 @@ def draw_gantt_from_events(env_a, env_b, env_c, output_path: Path, title: str):
     legend_handles = [
         mpatches.Patch(color="#4C78A8", label="New Assignment"),
         mpatches.Patch(color="#E45756", label="Rework Assignment"),
+        mpatches.Patch(color="#F28E2B", label="C Queue/Progress"),
         mpatches.Patch(color="#54A24B", label="Pack Completed"),
     ]
     ax.legend(handles=legend_handles, loc="upper right")
@@ -385,6 +459,81 @@ def test_scenario_3_large_batch():
     return env, is_valid
 
 
+def test_scenario_4_forced_rework_tight_spec():
+    """
+    Scenario 4: Forced rework with tight A spec
+    - tighten spec_a to intentionally induce repeated A failures
+    - verify that rework is actually generated and observed
+    """
+    print("\n" + "=" * 70)
+    print("SCENARIO 4: Forced rework with tight A spec")
+    print("=" * 70)
+
+    config = {
+        'num_machines_A': 1,
+        'num_machines_B': 1,
+        'num_machines_C': 1,
+        'process_time_A': 4,
+        'process_time_B': 4,
+        'process_time_C': 2,
+        'batch_size_A': 2,
+        'batch_size_B': 1,
+        'batch_size_C': 2,
+        'scheduler_A': 'fifo',
+        'scheduler_B': 'fifo',
+        'packing_C': 'fifo',
+        'max_steps': 28,
+        'deterministic_mode': True,
+    }
+
+    env = ManufacturingEnv(config)
+    env.reset(seed_initial_tasks=False)
+
+    random.seed(404)
+    np.random.seed(404)
+    initial_tasks = _generate_initial_tasks(env, count=6, current_time=0)
+
+    # Force deterministic QA miss in A so tasks must go through rework loop.
+    _set_tight_spec_a(initial_tasks, low=60.0, high=61.0)
+    env.env_A.add_tasks(initial_tasks)
+
+    print(f"\n[Setup] {len(initial_tasks)} tasks generated")
+    print("[Setup] Tight spec_a applied: (60.0, 61.0) for all initial tasks")
+    print("[Setup] Rework is intentionally expected")
+
+    print("\n[Simulation] Start...")
+    for _ in range(config['max_steps']):
+        env.step({})
+    print(f"[Simulation] Done (total {config['max_steps']} steps)")
+
+    obs = env._get_observation()
+    print(f"\n[Result] Completed tasks: {obs['num_completed']}")
+    print(
+        f"[Result] A process: {env.env_A.stats['total_passed']}/"
+        f"{env.env_A.stats['total_processed']} (rework {env.env_A.stats['total_reworked']})"
+    )
+
+    try:
+        draw_gantt_from_events(
+            env.env_A,
+            env.env_B,
+            env.env_C,
+            output_path=RESULTS_DIR / "scenario4_gantt_direct.png",
+            title="Scenario 4 - Forced rework (tight spec A)",
+        )
+    except Exception as e:
+        print(f"[Gantt] Direct gantt chart generation failed: {e}")
+
+    validator = ValidationReport()
+    is_valid = validator.validate_sync(env.env_A, env.env_B, env.env_C, expect_rework=True)
+    validator.print_report()
+
+    # Guardrail: this scenario must create rework by design.
+    assert env.env_A.stats["total_reworked"] > 0, "Scenario 4 should generate A rework but none was observed."
+
+    return env, is_valid
+
+
 def print_summary(results):
     """Print summary"""
     print("\n" + "=" * 70)
@@ -431,6 +580,14 @@ def main():
         results['Scenario 3: Large Batch'] = (env3, valid3)
     except Exception as e:
         print(f"Scenario 3 failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+    try:
+        env4, valid4 = test_scenario_4_forced_rework_tight_spec()
+        results['Scenario 4: Forced Rework'] = (env4, valid4)
+    except Exception as e:
+        print(f"Scenario 4 failed: {e}")
         import traceback
         traceback.print_exc()
 

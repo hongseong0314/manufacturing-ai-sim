@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
 
+from src.agents.factory import build_meta_scheduler
 from src.environment.manufacturing_env import ManufacturingEnv
 
 env_config = {
@@ -25,12 +26,15 @@ env_config = {
 }
 
 env = ManufacturingEnv(env_config)
+meta = build_meta_scheduler(env.config)
 obs = env.reset()
 
 print(f"초기: A대기={obs['A_state']['wait_pool_size']}")
 
 for step in range(150):
-    obs, reward, done, _ = env.step({})
+    state = env.get_decision_state()
+    actions = meta.decide(state)
+    obs, reward, done, _ = env.step(actions)
     
     if step % 30 == 0:
         print(f"\nStep {step}:")

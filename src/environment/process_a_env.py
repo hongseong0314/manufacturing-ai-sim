@@ -5,7 +5,7 @@ import numpy as np
 
 from src.objects import ProcessA_Machine, Task
 
-# Physical model params.
+# Physical model constants.
 W1_BASE, W2_BASE, W3_BASE, B_BASE = 0.5, 0.3, 0.2, 45.0
 W12_BASE = 0.01
 BETA, BETA_K = 0.2, 0.1
@@ -21,6 +21,7 @@ class ProcessA_Env:
     """
 
     def __init__(self, config: Dict[str, Any]):
+        """Initialize process-A machines, queues, and metrics."""
         self.num_machines = config.get("num_machines_A", 10)
         self.process_time = config.get("process_time_A", 15)
         self.batch_size_A = config.get("batch_size_A", 1)
@@ -43,6 +44,7 @@ class ProcessA_Env:
         self.event_log: List[Dict[str, Any]] = []
 
     def _get_physical_model_params(self, m_age: int) -> Tuple[float, float, float]:
+        """Return age-adjusted physical model coefficients."""
         w1 = W1_BASE * (1 - DELTA_W1 * m_age)
         w12 = W12_BASE * (1 - DELTA_W12 * m_age)
         b = B_BASE - DELTA_B * m_age
@@ -55,6 +57,7 @@ class ProcessA_Env:
         task: Task,
         current_time: int,
     ) -> bool:
+        """Evaluate A-process QA and append history record."""
         s1, s2, s3 = recipe
         w1, w12, b = self._get_physical_model_params(machine.m_age)
 
@@ -79,6 +82,7 @@ class ProcessA_Env:
         return passed
 
     def _resolve_machine(self, machine_key: Any) -> Optional[ProcessA_Machine]:
+        """Resolve action key (`0`, `\"0\"`, or `\"A_0\"`) to a machine."""
         machine_idx: Optional[int] = None
 
         if isinstance(machine_key, int):
@@ -93,6 +97,7 @@ class ProcessA_Env:
         return self.machines.get(machine_idx)
 
     def _normalize_uids(self, raw_uids: Any) -> List[int]:
+        """Normalize raw UID list into integer UIDs."""
         if not isinstance(raw_uids, list):
             return []
         normalized: List[int] = []
@@ -104,6 +109,7 @@ class ProcessA_Env:
         return normalized
 
     def reset(self):
+        """Reset machines, queues, event logs, and aggregate statistics."""
         self.machines = {
             i: ProcessA_Machine(i, batch_size=self.batch_size_A)
             for i in range(self.num_machines)
@@ -124,6 +130,11 @@ class ProcessA_Env:
         current_time: int,
         actions: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, List[Task]]:
+        """Advance process A by one step with externally provided actions.
+
+        Example:
+        `{"A_0": {"task_uids": [1, 2], "recipe": [10, 2, 1]}}`
+        """
         succeeded_tasks: List[Task] = []
         actions = actions or {}
 
@@ -248,9 +259,11 @@ class ProcessA_Env:
         return {"succeeded": succeeded_tasks, "rework": self.rework_pool}
 
     def add_tasks(self, tasks: List[Task]):
+        """Append new tasks to A waiting queue."""
         self.wait_pool.extend(tasks)
 
     def get_state(self) -> Dict[str, Any]:
+        """Return compact queue/quality metrics for process A."""
         if self.stats["total_processed"] > 0:
             self.stats["first_pass_rate"] = (
                 self.stats["total_passed"] / self.stats["total_processed"]

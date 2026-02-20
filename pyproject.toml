@@ -7,7 +7,7 @@
 # 한 줄의 최대 글자 수
 line-length = 88
 # 대상 Python 버전 (여러 버전 명시 가능)
-target-version = ['py38']
+target-version = ['py310']
 
 
 # ===================================================================
@@ -55,7 +55,7 @@ exclude = [
 line-length = 88
 
 # 대상 Python 버전
-target-version = "py38"
+target-version = "py310"
 
 [tool.ruff.mccabe]
 # 코드 복잡도 제한 (기본값: 10)

@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
 
 from src.environment.manufacturing_env import ManufacturingEnv
+from src.agents.factory import build_meta_scheduler
 
 sns.set(style="whitegrid")
 
@@ -44,6 +45,7 @@ STEPS = 300
 
 def collect_and_plot():
     env = ManufacturingEnv(env_config)
+    meta = build_meta_scheduler(env.config)
     obs = env.reset()
 
     # Metrics storage
@@ -63,14 +65,8 @@ def collect_and_plot():
     seen_tasks = set()
 
     for t in range(STEPS):
-        # simple scheduler: assign tasks to idle A machines FIFO with default recipe
-        actions = {'A': {}, 'B': None, 'C': None}
-        idle_a = [(mid, m) for mid, m in env.env_A.machines.items() if m.status == 'idle']
-        for mid, m in idle_a:
-            if env.env_A.wait_pool:
-                task = env.env_A.wait_pool[0]
-                actions['A'][f'A_{mid}'] = {'task_uids': [task.uid], 'recipe': [10.0, 2.0, 1.0]}
-
+        state = env.get_decision_state()
+        actions = meta.decide(state)
         obs, reward, done, info = env.step(actions)
 
         time_idx.append(obs['time'])
@@ -121,8 +117,7 @@ def collect_and_plot():
                             break
 
         # If tasks were completed this step, ensure C intervals closed
-        prev_completed = set(env.completed_tasks[:-1]) if len(env.completed_tasks) > 1 else set()
-        # (we'll just close any open intervals for tasks that are in completed list)
+        # Ensure any remaining open intervals are closed for tasks completed in C.
         for task in env.completed_tasks:
             uid = task.uid
             intervals = task_intervals.get(uid, [])

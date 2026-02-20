@@ -15,6 +15,7 @@ from collections import defaultdict
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
 
+from src.agents.factory import build_meta_scheduler
 from src.environment.manufacturing_env import ManufacturingEnv
 from src.objects import Task
 
@@ -116,6 +117,7 @@ def simulate_with_tracking(max_steps=150):
     }
     
     env = ManufacturingEnv(env_config)
+    meta = build_meta_scheduler(env.config)
     obs = env.reset()
     
     collector = DetailedGanttCollector()
@@ -124,7 +126,9 @@ def simulate_with_tracking(max_steps=150):
     
     for step in range(max_steps):
         collector.collect_state(env, step)
-        obs, reward, done, _ = env.step({})
+        state = env.get_decision_state()
+        actions = meta.decide(state)
+        obs, reward, done, _ = env.step(actions)
         
         if step % 30 == 0:
             print(f"  Step {step}/{max_steps}: {obs['num_completed']} tasks completed")

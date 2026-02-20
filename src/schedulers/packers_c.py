@@ -10,6 +10,8 @@ from src.objects import Task
 
 
 class BasePacker:
+    """Packing policy interface for process C."""
+
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         try:
@@ -32,9 +34,11 @@ class BasePacker:
         current_time: int,
         last_pack_time: int,
     ) -> Tuple[bool, str]:
+        """Return `(should_pack, reason)` for the current queue state."""
         raise NotImplementedError
 
     def select_pack(self, wait_pool: List[Task], current_time: int) -> Optional[List[Task]]:
+        """Select a concrete pack (task list) from queue candidates."""
         raise NotImplementedError
 
 

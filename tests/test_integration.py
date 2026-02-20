@@ -10,8 +10,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
 
+from src.agents.factory import build_meta_scheduler
 from src.environment.manufacturing_env import ManufacturingEnv
 import numpy as np
+
+
+def _step_with_meta(env, meta):
+    state = env.get_decision_state()
+    actions = meta.decide(state)
+    return env.step(actions)
 
 
 def test_deterministic_mode():
@@ -39,6 +46,7 @@ def test_deterministic_mode():
     }
     
     env = ManufacturingEnv(env_config)
+    meta = build_meta_scheduler(env.config)
     obs = env.reset()
     
     print(f"\n초기 상태:")
@@ -49,7 +57,7 @@ def test_deterministic_mode():
     step_count = 0
     
     while not done and step_count < env_config['max_steps']:
-        obs, reward, done, _ = env.step({})
+        obs, reward, done, _ = _step_with_meta(env, meta)
         step_count += 1
         
         if step_count % 20 == 0:
@@ -92,6 +100,7 @@ def test_stochastic_mode():
     }
     
     env = ManufacturingEnv(env_config)
+    meta = build_meta_scheduler(env.config)
     obs = env.reset()
     
     print(f"\n초기 상태: A대기={obs['A_state']['wait_pool_size']}개")
@@ -101,7 +110,7 @@ def test_stochastic_mode():
     metrics = []
     
     while not done and step_count < env_config['max_steps']:
-        obs, reward, done, _ = env.step({})
+        obs, reward, done, _ = _step_with_meta(env, meta)
         step_count += 1
         
         metrics.append({
@@ -155,11 +164,12 @@ def test_scheduler_comparison():
         }
         
         env = ManufacturingEnv(env_config)
+        meta = build_meta_scheduler(env.config)
         obs = env.reset()
         
         done = False
         while not done:
-            obs, reward, done, _ = env.step({})
+            obs, reward, done, _ = _step_with_meta(env, meta)
         
         results[scheduler_type] = {
             'completed': obs['num_completed'],
@@ -205,11 +215,12 @@ def test_packer_comparison():
         }
         
         env = ManufacturingEnv(env_config)
+        meta = build_meta_scheduler(env.config)
         obs = env.reset()
         
         done = False
         while not done:
-            obs, reward, done, _ = env.step({})
+            obs, reward, done, _ = _step_with_meta(env, meta)
         
         results[packer_type] = {
             'completed': obs['num_completed'],

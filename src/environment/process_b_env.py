@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Process B environment (inspection)."""
+"""Process B environment (inspection/quality screening)."""
 
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -7,21 +7,22 @@ import numpy as np
 
 from src.objects import ProcessB_Machine, Task
 
+# Physical model constants (simplified model used by this environment).
+ALPHA = 0.15
+BETA = 1.5
+
+# QA clipping range.
+MIN_QA = 50.0
+MAX_QA = 100.0
+
 
 class ProcessB_Env:
-    # Physical model params.
-    C1_BASE = 0.4
-    C2 = 0.3
-    C3 = 0.2
-    D_BASE = 40.0
-    C12_BASE = 0.01
-    DELTA_C = 0.001
-    DELTA_D = 0.02
+    """State-transition environment for process B.
 
-    ALPHA = 0.15
-    ALPHA_K = 0.1
-    BETA = 1.5
-    BETA_K = 0.1
+    Notes:
+    - This module intentionally uses a simplified QA model compared to process A.
+    - Scheduling is external; this environment only applies assignments and transitions.
+    """
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -49,6 +50,7 @@ class ProcessB_Env:
         self.event_log: List[Dict[str, Any]] = []
 
     def _resolve_machine(self, machine_key: Any) -> Optional[ProcessB_Machine]:
+        """Resolve action key (`0`, `"0"`, or `"B_0"`) into machine object."""
         machine_idx: Optional[int] = None
 
         if isinstance(machine_key, int):
@@ -63,6 +65,10 @@ class ProcessB_Env:
         return self.machines.get(machine_idx)
 
     def _normalize_uids(self, raw_uids: Any) -> List[int]:
+        """Normalize a raw UID list into integer UIDs.
+
+        Returns an empty list when payload format is invalid.
+        """
         if not isinstance(raw_uids, list):
             return []
         normalized: List[int] = []
@@ -74,6 +80,7 @@ class ProcessB_Env:
         return normalized
 
     def reset(self):
+        """Reset machines, queues, stats, and event logs."""
         self.machines = {
             i: ProcessB_Machine(i, batch_size=self.batch_size_B)
             for i in range(self.num_machines)
@@ -91,6 +98,7 @@ class ProcessB_Env:
         }
 
     def add_tasks(self, tasks: List[Task]):
+        """Add incoming tasks from process A into B waiting queue."""
         for task in tasks:
             task.location = "QUEUE_B"
         self.wait_pool.extend(tasks)
@@ -100,28 +108,34 @@ class ProcessB_Env:
         machine: ProcessB_Machine,
         recipe: List[float],
         task: Task,
-        current_time: int,
     ) -> Dict[str, Any]:
+        """Evaluate QA result for a finished task in process B.
+
+        Behavior:
+        - Recipe controls a baseline quality signal.
+        - Machine aging and solution usage reduce effective quality.
+        - B process uses strict bounds (`min < qa < max`) by design.
+        """
         try:
             r1, r2, r3 = [float(x) for x in recipe]
         except (ValueError, TypeError):
             r1, r2, r3 = 50.0, 50.0, 30.0
 
         base_quality = (r1 + r2 + r3) / 3.0
-        effectiveness = max(0.1, 1.0 - self.ALPHA * (machine.v / 30.0))
-        mean_qa = 50.0 + (base_quality - 40.0) * 0.5 * effectiveness
-        mean_qa = max(50.0, min(100.0, mean_qa))
+        effectiveness = max(0.1, 1.0 - ALPHA * (machine.v / 30.0))
+        mean_qa = MIN_QA + (base_quality - 40.0) * 0.5 * effectiveness
+        mean_qa = max(MIN_QA, min(MAX_QA, mean_qa))
 
         if self.deterministic:
             realized_qa = mean_qa
         else:
-            std_dev = self.BETA * 0.1
+            std_dev = BETA * 0.1
             realized_qa = np.random.normal(mean_qa, std_dev)
-            realized_qa = max(50.0, min(100.0, realized_qa))
+            realized_qa = max(MIN_QA, min(MAX_QA, realized_qa))
 
         degradation = 1.0 - (machine.b_age / 1000.0) * 0.1
         realized_qa *= degradation
-        realized_qa = max(50.0, min(100.0, realized_qa))
+        realized_qa = max(MIN_QA, min(MAX_QA, realized_qa))
 
         min_b, max_b = task.spec_b
         passed = min_b < realized_qa < max_b
@@ -138,12 +152,19 @@ class ProcessB_Env:
         current_time: int,
         actions: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """Advance process B by one simulation step.
+
+        Args:
+        - `current_time`: global simulation timestamp for this step.
+        - `actions`: assignment actions keyed by machine id, e.g.:
+          `{"B_0": {"task_uids": [101], "recipe": [50.0, 50.0, 30.0]}}`
+        """
         succeeded_tasks: List[Task] = []
         rework_tasks: List[Task] = []
         solution_replacements_this_step = 0
         actions = actions or {}
 
-        # 1) Finish inspection for busy machines.
+        # 1) Finish inspection on busy machines.
         for machine in self.machines.values():
             if machine.status != "busy" or current_time < machine.finish_time:
                 continue
@@ -151,7 +172,7 @@ class ProcessB_Env:
             recipe_used = machine.current_recipe if machine.current_recipe else [0.0, 0.0, 0.0]
             finished_batch = machine.finish_processing()
 
-            task_uids = [t.uid for t in finished_batch]
+            task_uids = [task.uid for task in finished_batch]
             self.event_log.append(
                 {
                     "timestamp": current_time,
@@ -164,7 +185,7 @@ class ProcessB_Env:
             )
 
             for task in finished_batch:
-                qa_result = self._run_qa_check(machine, recipe_used, task, current_time)
+                qa_result = self._run_qa_check(machine, recipe_used, task)
 
                 if qa_result["passed"]:
                     succeeded_tasks.append(task)
@@ -234,19 +255,13 @@ class ProcessB_Env:
                         break
                     local_uids.add(uid)
 
-                    rework_task = next(
-                        (task for task in self.rework_pool if task.uid == uid),
-                        None,
-                    )
+                    rework_task = next((task for task in self.rework_pool if task.uid == uid), None)
                     if rework_task is not None:
                         batch.append(rework_task)
                         pending_removals.append(("rework", rework_task))
                         continue
 
-                    wait_task = next(
-                        (task for task in self.wait_pool if task.uid == uid),
-                        None,
-                    )
+                    wait_task = next((task for task in self.wait_pool if task.uid == uid), None)
                     if wait_task is not None:
                         batch.append(wait_task)
                         pending_removals.append(("wait", wait_task))
@@ -290,7 +305,7 @@ class ProcessB_Env:
             self.stats["first_pass_rate"] = (
                 self.stats["total_passed"] / self.stats["total_processed"]
             )
-            total_rework_count = sum(t.rework_count for t in succeeded_tasks + rework_tasks)
+            total_rework_count = sum(task.rework_count for task in succeeded_tasks + rework_tasks)
             total_count = len(succeeded_tasks) + len(rework_tasks)
             if total_count > 0:
                 self.stats["avg_rework_count"] = total_rework_count / total_count
@@ -304,11 +319,12 @@ class ProcessB_Env:
         }
 
     def get_state(self) -> Dict[str, Any]:
+        """Return compact queue/machine/quality state for process B."""
         return {
             "wait_pool_size": len(self.wait_pool),
             "rework_pool_size": len(self.rework_pool),
-            "idle_machines": sum(1 for m in self.machines.values() if m.status == "idle"),
-            "busy_machines": sum(1 for m in self.machines.values() if m.status == "busy"),
+            "idle_machines": sum(1 for machine in self.machines.values() if machine.status == "idle"),
+            "busy_machines": sum(1 for machine in self.machines.values() if machine.status == "busy"),
             "first_pass_rate": self.stats["first_pass_rate"],
             "total_passed": self.stats["total_passed"],
             "total_reworked": self.stats["total_reworked"],

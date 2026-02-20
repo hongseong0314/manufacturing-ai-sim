@@ -5,6 +5,7 @@ import io
 import contextlib
 from typing import List, Dict, Any
 
+from src.agents.factory import build_meta_scheduler
 from src.environment.manufacturing_env import ManufacturingEnv
 from src.objects import Task
 
@@ -31,15 +32,33 @@ def _build_tasks(count: int, start_uid: int = 0, spec_a=(45.0, 55.0), spec_b=(20
     return tasks
 
 
-def _run_steps(env: ManufacturingEnv, n: int, suppress_stdout: bool = True):
+def _step_with_meta(env: ManufacturingEnv, meta):
+    state = env.get_decision_state()
+    actions = meta.decide(state)
+    return env.step(actions)
+
+
+def _run_steps(
+    env: ManufacturingEnv,
+    n: int,
+    suppress_stdout: bool = True,
+    use_meta: bool = True,
+):
+    meta = build_meta_scheduler(env.config) if use_meta else None
     if suppress_stdout:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             for _ in range(n):
-                env.step({})
+                if use_meta:
+                    _step_with_meta(env, meta)
+                else:
+                    env.step({})
     else:
         for _ in range(n):
-            env.step({})
+            if use_meta:
+                _step_with_meta(env, meta)
+            else:
+                env.step({})
 
 
 def _collect_events(env: ManufacturingEnv) -> List[Dict[str, Any]]:
@@ -82,15 +101,19 @@ def test_same_step_handoff_a_to_b():
     m = list(env.env_A.machines.values())[0]
     # start processing and set finish_time to 0 so step() treats it as completed now
     m.start_processing([t], finish_time=0, recipe=[10, 2, 1])
-    obs, _, _, _ = env.step({})
-    # find A completion event and B assignment event for the same uid
+    # strict external mode: no auto assignment, but A completion and handoff still occur
+    _ = env.step({})
     a_events = [e for e in env.env_A.event_log if e.get('event_type') == 'task_completed']
-    b_events = [e for e in env.env_B.event_log if e.get('event_type') == 'task_assigned']
     assert a_events, "[Timing] No A completion event recorded"
+    assert any(task.uid == t.uid for task in env.env_B.wait_pool), "[Timing] A->B handoff missing after A completion"
+
+    # next meta step should assign into B
+    _run_steps(env, 1)
+    b_events = [e for e in env.env_B.event_log if e.get('event_type') == 'task_assigned']
     assert b_events, "[Timing] No B assignment event recorded"
     a_time = a_events[-1]['end_time']
     b_time = b_events[-1]['start_time']
-    assert a_time == b_time, f"[Invariant] A completion time ({a_time}) != B assignment time ({b_time})"
+    assert b_time >= a_time, f"[Invariant] B assignment time ({b_time}) must be >= A completion time ({a_time})"
 
 
 def test_same_step_handoff_b_to_c_under_pack_trigger():
@@ -101,14 +124,36 @@ def test_same_step_handoff_b_to_c_under_pack_trigger():
     t = _build_tasks(1, start_uid=2)[0]
     # seed without initial tasks
     env.reset(seed_initial_tasks=False)
-    # add to B queue and run step to let B->C happen
-    t.location = 'QUEUE_B'
-    env.env_B.add_tasks([t])
+    # force a B completion at t=0 to trigger B->C handoff in the same environment step
+    m = list(env.env_B.machines.values())[0]
+    m.start_processing([t], finish_time=0, recipe=[50.0, 50.0, 30.0])
     _run_steps(env, 1)
     # check that tasks that passed B reached C queue
     c_queue = env.env_C.wait_pool
     for task in c_queue:
         assert getattr(task, 'arrival_time', None) == 0, f"[Timing] Expected arrival_time==0 for uid {task.uid}, got {task.arrival_time}"
+
+
+def test_same_step_b_to_c_pack_when_ready():
+    cfg = {
+        'num_machines_A': 1,
+        'num_machines_B': 1,
+        'num_machines_C': 1,
+        'min_queue_size': 1,
+        'batch_size_C': 1,
+        'packing_C': 'fifo',
+        'deterministic_mode': True,
+    }
+    env = ManufacturingEnv(cfg)
+    env.reset(seed_initial_tasks=False)
+
+    t = _build_tasks(1, start_uid=22)[0]
+    b_machine = list(env.env_B.machines.values())[0]
+    b_machine.start_processing([t], finish_time=0, recipe=[50.0, 50.0, 30.0])
+
+    _run_steps(env, 1)
+    assert len(env.completed_tasks) == 1, "[Timing] B->C should pack in same step when C is immediately ready"
+    assert env.env_C.pack_count == 1, "[Timing] Expected C pack_count==1 after same-step handoff pack"
 
 
 def test_no_machine_overlap_on_a_and_b():
@@ -208,6 +253,97 @@ def test_external_actions_should_override_auto_assignment_in_a():
     m = env.env_A.machines.get(0)
     uids = [t.uid for t in getattr(m, 'current_batch', [])]
     assert 3001 in uids, f"[ActionAPI] External action did not assign requested uid to machine: {uids}"
+
+
+def test_step_without_actions_should_not_auto_assign_when_idle():
+    cfg = {'num_machines_A': 1, 'num_machines_B': 1, 'num_machines_C': 1}
+    env = ManufacturingEnv(cfg)
+    tasks = _build_tasks(2, start_uid=3500)
+    env.reset(initial_tasks=tasks)
+    env.step({})
+    m = env.env_A.machines.get(0)
+    assert m.status == "idle", "[StrictExternal] step({}) should not auto-assign tasks in A"
+    assert not getattr(m, "current_batch", []), "[StrictExternal] A machine must have empty current_batch without external actions"
+
+
+def test_get_decision_state_schema_has_required_fields():
+    cfg = {'num_machines_A': 1, 'num_machines_B': 1, 'num_machines_C': 1}
+    env = ManufacturingEnv(cfg)
+    tasks = _build_tasks(2, start_uid=3600)
+    env.reset(seed_initial_tasks=False, initial_tasks=tasks)
+
+    state = env.get_decision_state()
+
+    top_required = {'time', 'max_steps', 'num_completed', 'tasks', 'A', 'B', 'C'}
+    assert top_required.issubset(set(state.keys())), f"[StateAPI] Missing top-level keys: {top_required - set(state.keys())}"
+
+    for process_key in ['A', 'B', 'C']:
+        process_state = state[process_key]
+        assert 'machines' in process_state and isinstance(process_state['machines'], dict), f"[StateAPI] {process_key}.machines missing or invalid"
+        assert 'wait_pool_uids' in process_state and isinstance(process_state['wait_pool_uids'], list), f"[StateAPI] {process_key}.wait_pool_uids missing or invalid"
+        assert 'queue_stats' in process_state and isinstance(process_state['queue_stats'], dict), f"[StateAPI] {process_key}.queue_stats missing or invalid"
+
+    assert 'rework_pool_uids' in state['A'], "[StateAPI] A.rework_pool_uids missing"
+    assert 'rework_pool_uids' in state['B'], "[StateAPI] B.rework_pool_uids missing"
+
+    a_machine = state['A']['machines'].get('A_0', {})
+    a_machine_required = {'status', 'finish_time', 'batch_size', 'u', 'm_age', 'current_batch_uids'}
+    assert a_machine_required.issubset(set(a_machine.keys())), f"[StateAPI] Missing A machine keys: {a_machine_required - set(a_machine.keys())}"
+
+    b_machine = state['B']['machines'].get('B_0', {})
+    b_machine_required = {'status', 'finish_time', 'batch_size', 'v', 'b_age', 'current_batch_uids'}
+    assert b_machine_required.issubset(set(b_machine.keys())), f"[StateAPI] Missing B machine keys: {b_machine_required - set(b_machine.keys())}"
+
+    c_machine = state['C']['machines'].get('C_0', {})
+    c_machine_required = {'status', 'finish_time', 'batch_size', 'current_batch_uids'}
+    assert c_machine_required.issubset(set(c_machine.keys())), f"[StateAPI] Missing C machine keys: {c_machine_required - set(c_machine.keys())}"
+
+    assert 3600 in state['tasks'], "[StateAPI] Task snapshot missing seeded uid=3600"
+    task_row = state['tasks'][3600]
+    task_required = {
+        'uid', 'job_id', 'due_date', 'spec_a', 'spec_b', 'location',
+        'rework_count', 'arrival_time', 'material_type', 'color',
+        'margin_value', 'realized_qa_A', 'realized_qa_B',
+    }
+    assert task_required.issubset(set(task_row.keys())), f"[StateAPI] Missing task snapshot keys: {task_required - set(task_row.keys())}"
+
+
+def test_meta_scheduler_prioritizes_rework_and_avoids_duplicate_assignment():
+    cfg = {
+        'num_machines_A': 2,
+        'num_machines_B': 1,
+        'num_machines_C': 1,
+        'batch_size_A': 2,
+    }
+    env = ManufacturingEnv(cfg)
+    env.reset(seed_initial_tasks=False)
+
+    wait_tasks = _build_tasks(3, start_uid=3700)
+    rework_task = _build_tasks(1, start_uid=3800)[0]
+    rework_task.location = 'REWORK_A'
+    rework_task.rework_count = 1
+
+    env.env_A.wait_pool.extend(wait_tasks)
+    env.env_A.rework_pool.append(rework_task)
+
+    meta = build_meta_scheduler(env.config)
+    actions = meta.decide(env.get_decision_state())
+
+    a_actions = actions.get('A', {})
+    assert a_actions, "[Meta] Expected A actions but got none"
+
+    all_uids = []
+    for assignment in a_actions.values():
+        all_uids.extend(assignment.get('task_uids', []))
+
+    assert len(all_uids) == len(set(all_uids)), "[Meta] Duplicate task UID assigned to multiple A machines"
+    assert rework_task.uid in all_uids, "[Meta] Rework task should be selected before/with new tasks"
+
+    first_machine_id = sorted(a_actions.keys())[0]
+    first_assignment = a_actions[first_machine_id]
+    first_batch = first_assignment.get('task_uids', [])
+    assert first_batch and first_batch[0] == rework_task.uid, "[Meta] Rework task should be first in first A batch"
+    assert first_assignment.get('task_type') == 'rework', "[Meta] task_type should be 'rework' when rework task is selected"
 
 
 def test_stochastic_quick_robustness_multi_seed():

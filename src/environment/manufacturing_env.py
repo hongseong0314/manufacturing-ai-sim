@@ -1,29 +1,23 @@
 # -*- coding: utf-8 -*-
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 from src.data_generator import DataGenerator
 from src.environment.process_a_env import ProcessA_Env
 from src.environment.process_b_env import ProcessB_Env
 from src.environment.process_c_env import ProcessC_Env
 from src.objects import Task
-from src.schedulers.packers_c import FIFOPacker, GreedyScorePacker, RandomPacker
-from src.schedulers.schedulers_a import AdaptiveScheduler, FIFOScheduler, RLBasedScheduler as ARLBasedScheduler
-from src.schedulers.schedulers_b import (
-    FIFOBaseline,
-    RLBasedScheduler as BRLBasedScheduler,
-    RuleBasedScheduler,
-)
 
 
 class ManufacturingEnv:
     """Top-level orchestrator integrating process A/B/C.
 
-    Decision policy lives here:
-    - Build default actions using schedulers/packer when process action is omitted.
-    - Respect external process actions as an explicit override.
+    Strict External control:
+    - This environment only applies actions and advances state transitions.
+    - Scheduling/packing decisions must be provided from outside (e.g., Meta Scheduler).
     """
 
     def __init__(self, config: Dict[str, Any]):
+        """Initialize process environments and normalize cross-process config."""
         self.config = self._normalize_config(config)
         self.time = 0
         self.data_generator = DataGenerator()
@@ -33,13 +27,10 @@ class ManufacturingEnv:
         self.env_B = ProcessB_Env(self.config)
         self.env_C = ProcessC_Env(self.config)
 
-        self.scheduler_A = self._build_scheduler_a(self.config)
-        self.scheduler_B = self._build_scheduler_b(self.config)
-        self.packer_C = self._build_packer_c(self.config)
-
         self.completed_tasks: List[Task] = []
 
     def _normalize_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize cross-process config keys and safe defaults."""
         normalized = dict(config)
         try:
             batch_size_c = int(normalized.get("batch_size_C", normalized.get("N_pack", 4)))
@@ -59,161 +50,115 @@ class ManufacturingEnv:
         normalized["min_queue_size"] = min(raw_min_queue, batch_size_c)
         return normalized
 
-    def _build_scheduler_a(self, config: Dict[str, Any]):
-        scheduler_type = config.get("scheduler_A", "fifo")
-        if scheduler_type == "fifo":
-            return FIFOScheduler(config)
-        if scheduler_type == "adaptive":
-            return AdaptiveScheduler(config)
-        if scheduler_type == "rl":
-            return ARLBasedScheduler(config)
-        return FIFOScheduler(config)
-
-    def _build_scheduler_b(self, config: Dict[str, Any]):
-        scheduler_type = config.get("scheduler_B", "rule-based")
-        if scheduler_type == "fifo":
-            return FIFOBaseline(config)
-        if scheduler_type == "rule-based":
-            return RuleBasedScheduler(config)
-        if scheduler_type == "rl":
-            return BRLBasedScheduler(config)
-        return RuleBasedScheduler(config)
-
-    def _build_packer_c(self, config: Dict[str, Any]):
-        packing_strategy = config.get("packing_C", "greedy")
-        if packing_strategy == "fifo":
-            return FIFOPacker(config)
-        if packing_strategy == "random":
-            return RandomPacker(config)
-        if packing_strategy == "greedy":
-            return GreedyScorePacker(config)
-        return GreedyScorePacker(config)
-
-    def _plan_batch_actions(self, env, scheduler) -> Dict[str, Dict[str, Any]]:
-        planned: Dict[str, Dict[str, Any]] = {}
-        allocated_uids: Set[int] = set()
-
-        for machine in env.machines.values():
-            if machine.status != "idle":
+    def _normalize_action_uids(self, raw_uids: Any) -> List[int]:
+        """Normalize a raw UID list into integer UIDs."""
+        if not isinstance(raw_uids, list):
+            return []
+        normalized: List[int] = []
+        for raw_uid in raw_uids:
+            try:
+                normalized.append(int(raw_uid))
+            except (TypeError, ValueError):
                 continue
+        return normalized
 
-            wait_candidates = [task for task in env.wait_pool if task.uid not in allocated_uids]
-            rework_candidates = [task for task in env.rework_pool if task.uid not in allocated_uids]
+    def _sanitize_actions_for_process(
+        self,
+        raw_actions: Dict[str, Any],
+        wait_uids: Set[int],
+        rework_uids: Optional[Set[int]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Drop invalid or duplicate UIDs for a process action payload.
 
-            if not wait_candidates and not rework_candidates:
-                continue
-
-            queue_info = {
-                "wait_pool_size": len(wait_candidates),
-                "rework_pool_size": len(rework_candidates),
-                "rework_queue_size": len(rework_candidates),
-            }
-
-            # Use copied pools so planner decision does not mutate env state.
-            batch, task_type = scheduler.select_batch(
-                list(wait_candidates),
-                list(rework_candidates),
-                machine.batch_size,
-            )
-            if not batch:
-                continue
-
-            recipe = scheduler.get_recipe(batch[0], machine, queue_info)
-            task_uids = [task.uid for task in batch]
-            allocated_uids.update(task_uids)
-
-            planned[machine.id] = {
-                "task_uids": task_uids,
-                "recipe": recipe,
-                "task_type": task_type or "planned",
-            }
-
-        return planned
-
-    def _plan_actions_a(self) -> Dict[str, Dict[str, Any]]:
-        return self._plan_batch_actions(self.env_A, self.scheduler_A)
-
-    def _plan_actions_b(self) -> Dict[str, Dict[str, Any]]:
-        return self._plan_batch_actions(self.env_B, self.scheduler_B)
-
-    def _plan_actions_c(self) -> Dict[str, Dict[str, Any]]:
-        should_pack, reason = self.packer_C.should_pack(
-            self.env_C.wait_pool,
-            self.time,
-            self.env_C.last_pack_time,
-        )
-        force_timeout_pack = False
-        if not should_pack and self.env_C.wait_pool:
-            oldest_arrival = min(
-                getattr(task, "arrival_time", self.time) for task in self.env_C.wait_pool
-            )
-            force_timeout_pack = (
-                self.time - oldest_arrival > self.packer_C.max_wait_time
-            )
-
-        if not should_pack and not force_timeout_pack:
+        The sanitizer keeps only UIDs that currently exist in the target process
+        wait/rework pools, which makes pre-planned incoming actions safe.
+        """
+        if not isinstance(raw_actions, dict):
             return {}
 
-        # Use copied pool so planner decision does not mutate env state.
-        selected_pack = self.packer_C.select_pack(list(self.env_C.wait_pool), self.time)
-        if not selected_pack:
-            return {}
+        valid_rework = rework_uids or set()
+        sanitized: Dict[str, Dict[str, Any]] = {}
+        globally_used: Set[int] = set()
 
-        machine_id = "C_0"
-        if self.env_C.machines:
-            machine_id = next(iter(self.env_C.machines.values())).id
+        for machine_key, assignment in raw_actions.items():
+            if not isinstance(assignment, dict):
+                continue
 
-        return {
-            machine_id: {
-                "task_uids": [task.uid for task in selected_pack],
-                "reason": reason if should_pack else "timeout_fallback",
-            }
-        }
+            requested_uids = self._normalize_action_uids(assignment.get("task_uids", []))
+            local_seen: Set[int] = set()
+            valid_uids: List[int] = []
+            for uid in requested_uids:
+                if uid in local_seen or uid in globally_used:
+                    continue
+                if uid in wait_uids or uid in valid_rework:
+                    valid_uids.append(uid)
+                    local_seen.add(uid)
 
-    def _step_a(self, incoming_actions: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-        # External action is authoritative for this process.
-        if "A" in incoming_actions:
-            return self.env_A.step(self.time, incoming_actions.get("A") or {})
+            if not valid_uids:
+                continue
 
-        # Phase 1: complete ongoing work at this tick.
-        results_a = self.env_A.step(self.time, {})
-        # Phase 2: plan and assign at the same tick to avoid artificial 1-tick idle gaps.
-        planned_a = self._plan_actions_a()
-        if planned_a:
-            self.env_A.step(self.time, planned_a)
-        return results_a
+            cleaned = dict(assignment)
+            cleaned["task_uids"] = valid_uids
+            sanitized[str(machine_key)] = cleaned
+            globally_used.update(valid_uids)
 
-    def _step_b(self, incoming_actions: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-        if "B" in incoming_actions:
-            return self.env_B.step(self.time, incoming_actions.get("B") or {})
+        return sanitized
 
-        results_b = self.env_B.step(self.time, {})
-        planned_b = self._plan_actions_b()
-        if planned_b:
-            self.env_B.step(self.time, planned_b)
-        return results_b
-
-    def _step_c(self, incoming_actions: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-        if "C" in incoming_actions:
-            return self.env_C.step(self.time, incoming_actions.get("C") or {})
-        planned_c = self._plan_actions_c()
-        return self.env_C.step(self.time, planned_c)
+    def _finishing_now_uids(self, machines: Dict[Any, Any]) -> List[int]:
+        """Collect UIDs from machines that finish at current global time."""
+        finishing_uids: List[int] = []
+        for machine in machines.values():
+            if getattr(machine, "status", "") != "busy":
+                continue
+            try:
+                finish_time = int(getattr(machine, "finish_time", -1))
+            except (TypeError, ValueError):
+                finish_time = -1
+            if finish_time > self.time:
+                continue
+            for task in getattr(machine, "current_batch", []):
+                finishing_uids.append(task.uid)
+        return finishing_uids
 
     def step(self, actions: Optional[Dict[str, Dict[str, Any]]] = None):
+        """Advance A->B->C by one global step using external actions.
+
+        Example action payload (V1):
+        {
+            "A": {"A_0": {"task_uids": [1, 2], "recipe": [10.0, 2.0, 1.0]}},
+            "B": {"B_0": {"task_uids": [3], "recipe": [50.0, 50.0, 30.0]}},
+            "C": {"C_0": {"task_uids": [4, 5], "reason": "batch_ready"}},
+        }
+        """
         incoming_actions = actions if isinstance(actions, dict) else {}
+        a_actions = incoming_actions.get("A") or {}
+        b_actions = incoming_actions.get("B") or {}
+        c_actions = incoming_actions.get("C") or {}
 
         # 1) Process A step.
-        results_A = self._step_a(incoming_actions)
+        results_A = self.env_A.step(self.time, a_actions)
         if results_A["succeeded"]:
             self.env_B.add_tasks(results_A["succeeded"])
 
         # 2) Process B step.
-        results_B = self._step_b(incoming_actions)
+        b_wait_uids = {task.uid for task in self.env_B.wait_pool}
+        b_rework_uids = {task.uid for task in self.env_B.rework_pool}
+        sanitized_b_actions = self._sanitize_actions_for_process(
+            b_actions,
+            wait_uids=b_wait_uids,
+            rework_uids=b_rework_uids,
+        )
+        results_B = self.env_B.step(self.time, sanitized_b_actions)
         if results_B["succeeded"]:
             self.env_C.add_tasks(results_B["succeeded"], current_time=self.time)
 
         # 3) Process C step.
-        results_C = self._step_c(incoming_actions)
+        c_wait_uids = {task.uid for task in self.env_C.wait_pool}
+        sanitized_c_actions = self._sanitize_actions_for_process(
+            c_actions,
+            wait_uids=c_wait_uids,
+        )
+        results_C = self.env_C.step(self.time, sanitized_c_actions)
         if results_C["completed"]:
             for task in results_C["completed"]:
                 if task.location != "COMPLETED":
@@ -242,6 +187,12 @@ class ManufacturingEnv:
         seed_initial_tasks: bool = True,
         initial_tasks: Optional[List[Task]] = None,
     ):
+        """Reset full manufacturing environment.
+
+        Args:
+        - `seed_initial_tasks=True`: generate default initial arrivals for A.
+        - `initial_tasks`: explicit initial set (takes precedence when provided).
+        """
         self.time = 0
         self.data_generator = DataGenerator()
         self.completed_tasks = []
@@ -261,6 +212,7 @@ class ManufacturingEnv:
         return self._get_observation()
 
     def _get_observation(self) -> Dict[str, Any]:
+        """Return compact runtime observation used by scripts/tests."""
         return {
             "time": self.time,
             "A_state": self.env_A.get_state(),
@@ -269,14 +221,157 @@ class ManufacturingEnv:
             "num_completed": len(self.completed_tasks),
         }
 
-    def _calculate_reward(self, res_A, res_B, res_C) -> float:
+    def _iter_machine_tasks(self, machines: Dict[Any, Any]) -> Iterable[Task]:
+        """Yield tasks currently being processed by the provided machines."""
+        for machine in machines.values():
+            for task in getattr(machine, "current_batch", []):
+                yield task
+
+    def _snapshot_task(self, task: Task) -> Dict[str, Any]:
+        """Create scheduler-facing immutable snapshot for a single task."""
+        return {
+            "uid": task.uid,
+            "job_id": getattr(task, "job_id", ""),
+            "due_date": getattr(task, "due_date", 0),
+            "spec_a": tuple(getattr(task, "spec_a", (45.0, 55.0))),
+            "spec_b": tuple(getattr(task, "spec_b", (20.0, 80.0))),
+            "location": getattr(task, "location", ""),
+            "rework_count": int(getattr(task, "rework_count", 0)),
+            "arrival_time": int(getattr(task, "arrival_time", 0)),
+            "material_type": getattr(task, "material_type", "plastic"),
+            "color": getattr(task, "color", "red"),
+            "margin_value": float(getattr(task, "margin_value", 0.5)),
+            "realized_qa_A": float(getattr(task, "realized_qa_A", -1.0)),
+            "realized_qa_B": float(getattr(task, "realized_qa_B", -1.0)),
+        }
+
+    def _snapshot_machines_a(self) -> Dict[str, Dict[str, Any]]:
+        """Snapshot A machine states."""
+        snapshot: Dict[str, Dict[str, Any]] = {}
+        for machine in self.env_A.machines.values():
+            snapshot[str(machine.id)] = {
+                "status": machine.status,
+                "finish_time": machine.finish_time,
+                "batch_size": machine.batch_size,
+                "u": getattr(machine, "u", 0),
+                "m_age": getattr(machine, "m_age", 0),
+                "current_batch_uids": [task.uid for task in machine.current_batch],
+            }
+        return snapshot
+
+    def _snapshot_machines_b(self) -> Dict[str, Dict[str, Any]]:
+        """Snapshot B machine states."""
+        snapshot: Dict[str, Dict[str, Any]] = {}
+        for machine in self.env_B.machines.values():
+            snapshot[str(machine.id)] = {
+                "status": machine.status,
+                "finish_time": machine.finish_time,
+                "batch_size": machine.batch_size,
+                "v": getattr(machine, "v", 0),
+                "b_age": getattr(machine, "b_age", 0),
+                "current_batch_uids": [task.uid for task in machine.current_batch],
+            }
+        return snapshot
+
+    def _snapshot_machines_c(self) -> Dict[str, Dict[str, Any]]:
+        """Snapshot C machine states."""
+        snapshot: Dict[str, Dict[str, Any]] = {}
+        for machine in self.env_C.machines.values():
+            snapshot[str(machine.id)] = {
+                "status": machine.status,
+                "finish_time": machine.finish_time,
+                "batch_size": machine.batch_size,
+                "current_batch_uids": [task.uid for task in machine.current_batch],
+            }
+        return snapshot
+
+    def _collect_all_tasks(self) -> Dict[int, Dict[str, Any]]:
+        """Collect de-duplicated task snapshots across all queues/machines."""
+        ordered_sources: List[Iterable[Task]] = [
+            self.env_A.wait_pool,
+            self.env_A.rework_pool,
+            self._iter_machine_tasks(self.env_A.machines),
+            self.env_B.wait_pool,
+            self.env_B.rework_pool,
+            self._iter_machine_tasks(self.env_B.machines),
+            self.env_C.wait_pool,
+            self._iter_machine_tasks(self.env_C.machines),
+            self.env_C.completed_tasks,
+            self.completed_tasks,
+        ]
+
+        seen: Dict[int, Dict[str, Any]] = {}
+        for source in ordered_sources:
+            for task in source:
+                if task.uid in seen:
+                    continue
+                seen[task.uid] = self._snapshot_task(task)
+        return seen
+
+    def get_decision_state(self) -> Dict[str, Any]:
+        """Return scheduler-facing state snapshot for external decision making.
+
+        Returned structure (compact):
+        - top: `time`, `max_steps`, `num_completed`, `tasks`
+        - per process: `machines`, queue UID lists, queue stats
+        - flow hints: `incoming_from_A_uids` and `incoming_from_B_uids`
+        """
+        tasks = self._collect_all_tasks()
+        a_wait_uids = [task.uid for task in self.env_A.wait_pool]
+        a_rework_uids = [task.uid for task in self.env_A.rework_pool]
+        b_wait_uids = [task.uid for task in self.env_B.wait_pool]
+        b_rework_uids = [task.uid for task in self.env_B.rework_pool]
+        c_wait_uids = [task.uid for task in self.env_C.wait_pool]
+        a_finishing_now_uids = self._finishing_now_uids(self.env_A.machines)
+        b_finishing_now_uids = self._finishing_now_uids(self.env_B.machines)
+
+        return {
+            "time": self.time,
+            "max_steps": self.config.get("max_steps", 1000),
+            "num_completed": len(self.completed_tasks),
+            "tasks": tasks,
+            "A": {
+                "machines": self._snapshot_machines_a(),
+                "wait_pool_uids": a_wait_uids,
+                "rework_pool_uids": a_rework_uids,
+                "finishing_now_uids": a_finishing_now_uids,
+                "queue_stats": {
+                    "wait_pool_size": len(a_wait_uids),
+                    "rework_pool_size": len(a_rework_uids),
+                },
+            },
+            "B": {
+                "machines": self._snapshot_machines_b(),
+                "wait_pool_uids": b_wait_uids,
+                "rework_pool_uids": b_rework_uids,
+                "finishing_now_uids": b_finishing_now_uids,
+                "incoming_from_A_uids": a_finishing_now_uids,
+                "queue_stats": {
+                    "wait_pool_size": len(b_wait_uids),
+                    "rework_pool_size": len(b_rework_uids),
+                },
+            },
+            "C": {
+                "machines": self._snapshot_machines_c(),
+                "wait_pool_uids": c_wait_uids,
+                "incoming_from_B_uids": b_finishing_now_uids,
+                "queue_stats": {"wait_pool_size": len(c_wait_uids)},
+                "last_pack_time": self.env_C.last_pack_time,
+                "pack_count": self.env_C.pack_count,
+            },
+        }
+
+    def _calculate_reward(self, _res_A, _res_B, res_C) -> float:
         return len(res_C.get("completed", []))
 
     def _check_if_done(self) -> bool:
+        """Stop condition based on max step horizon."""
         return self.time >= self.config.get("max_steps", 1000)
 
 
 if __name__ == "__main__":
+    from src.agents.factory import build_meta_scheduler
+
     env_config = {
         "num_machines_A": 2,
         "num_machines_B": 1,
@@ -288,6 +383,7 @@ if __name__ == "__main__":
     }
 
     env = ManufacturingEnv(env_config)
+    meta = build_meta_scheduler(env.config)
     obs = env.reset()
 
     print("\n--- Initial state (t=0) ---")
@@ -296,13 +392,12 @@ if __name__ == "__main__":
     total_reward = 0
 
     while not done:
-        # Empty action means "use default external scheduler/packer decisions"
-        # configured in ManufacturingEnv.
-        obs, reward, done, _ = env.step({})
+        state = env.get_decision_state()
+        actions = meta.decide(state)
+        obs, reward, done, _ = env.step(actions)
         total_reward += reward
         print(
-            f"--- t={obs['time']} | Action: auto(planner) "
-            f"| Reward: {reward} | Total Reward: {total_reward} "
+            f"--- t={obs['time']} | Reward: {reward} | Total Reward: {total_reward} "
             f"| Completed: {obs['num_completed']} ---"
         )
 

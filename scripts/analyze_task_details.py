@@ -11,6 +11,7 @@ from collections import defaultdict
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
 
+from src.agents.factory import build_meta_scheduler
 from src.environment.manufacturing_env import ManufacturingEnv
 
 def track_task_details(max_steps=150):
@@ -30,6 +31,7 @@ def track_task_details(max_steps=150):
     }
     
     env = ManufacturingEnv(env_config)
+    meta = build_meta_scheduler(env.config)
     obs = env.reset()
     
     # Task의 위치 변경 추적
@@ -80,7 +82,9 @@ def track_task_details(max_steps=150):
         for task in env.env_C.completed_tasks:
             task_locations[task.uid].append((step, 'COMPLETED'))
         
-        obs, reward, done, _ = env.step({})
+        state = env.get_decision_state()
+        actions = meta.decide(state)
+        obs, reward, done, _ = env.step(actions)
         
         if step % 30 == 0:
             print(f"  Step {step}/{max_steps}")

@@ -1,7 +1,7 @@
-﻿# Batch Scheduling
+# Batch Scheduling
 
 다중 공정(`A -> B -> C`) 배치 스케줄링 시뮬레이터입니다.  
-현재 기준으로 이벤트 로그 기반 검증과 Gantt 시각화가 정리되어 있습니다.
+현재 구조는 `Env(전이)`와 `Meta Scheduler(의사결정)`를 분리한 형태입니다.
 
 ## 프로세스 플로우
 아래 다이어그램은 시뮬레이션 프로세스 흐름입니다.
@@ -10,20 +10,45 @@
 
 ## 현재 핵심 동작
 - 공정 오케스트레이션: `A -> B -> C` same-step handoff
+- `ManufacturingEnv`: 상태 전이/핸드오프/시간 증가만 담당
+- `Meta Scheduler`: 공정별 액션 생성 담당
+- A/B: `Assignment Scheduler(select_batch)` + `Recipe Tuner(get_recipe)` 분리
+- C: `Packer(should_pack/select_pack)` 정책
 - 환경 리셋 옵션:
-  - `env.reset()` : 기존 기본 동작 유지(초기 Task 자동 주입)
-  - `env.reset(seed_initial_tasks=False)` : 빈 큐로 시작
-  - `env.reset(initial_tasks=[...])` : 지정 Task만 주입
+- `env.reset()` : 기존 기본 동작 유지(초기 Task 자동 주입)
+- `env.reset(seed_initial_tasks=False)` : 빈 큐로 시작
+- `env.reset(initial_tasks=[...])` : 지정 Task만 주입
 - 검증: 이벤트 로그 기반 동기/흐름 검증
 - 시각화: 테스트 실행 결과로 direct Gantt PNG 생성
 
 ## 주요 파일
-- `src/environment/manufacturing_env.py` : 상위 환경 오케스트레이션
+- `src/environment/manufacturing_env.py` : 상위 환경 오케스트레이션(전이 전용)
 - `src/environment/process_a_env.py` : A 공정
 - `src/environment/process_b_env.py` : B 공정
 - `src/environment/process_c_env.py` : C 공정
+- `src/agents/default_meta_scheduler.py` : 기본 Meta Scheduler
+- `src/agents/factory.py` : config 기반 Meta Scheduler 조립
+- `src/schedulers/schedulers_a.py`, `src/schedulers/schedulers_b.py` : A/B 할당 정책
+- `src/tuners/tuners_a.py`, `src/tuners/tuners_b.py` : A/B 레시피 튜너
+- `src/schedulers/packers_c.py` : C 패킹 정책
 - `tests/test_gantt_validation.py` : 시나리오 검증 + direct Gantt 생성
 - `scripts/generate_gantt_chart_v3.py` : 이벤트 검증 리포트 유틸
+
+## 실행 패턴 (권장)
+```python
+from src.environment.manufacturing_env import ManufacturingEnv
+from src.agents.factory import build_meta_scheduler
+
+env = ManufacturingEnv(config)
+meta = build_meta_scheduler(env.config)
+obs = env.reset()
+
+done = False
+while not done:
+    state = env.get_decision_state()
+    actions = meta.decide(state)  # V1 action schema
+    obs, reward, done, info = env.step(actions)
+```
 
 ## 실행
 ```bash
@@ -35,6 +60,7 @@ conda run -n batch_env python tests/test_gantt_validation.py
 - `scenario1_gantt_direct.png`
 - `scenario2_gantt_direct.png`
 - `scenario3_gantt_direct.png`
+- `scenario4_gantt_direct.png`
 
 ## 문제 정의/설계 문서
 - [A Problem](docs/model_a_problem_definition.md)

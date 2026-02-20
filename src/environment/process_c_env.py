@@ -9,7 +9,10 @@ from src.objects import ProcessC_Machine, Task
 
 
 class ProcessC_Env:
+    """State-transition environment for process C (packing/finalization)."""
+
     def __init__(self, config: Dict[str, Any]):
+        """Initialize process-C queueing/packing state."""
         self.config = config
         self.num_machines = config.get("num_machines_C", 1)
         try:
@@ -48,6 +51,7 @@ class ProcessC_Env:
         self.compatibility_matrix = self._init_compatibility_matrix()
 
     def _init_compatibility_matrix(self) -> Dict[Tuple[str, str], float]:
+        """Build material/color compatibility lookup table."""
         return {
             # Material
             ("plastic", "plastic"): 1.0,
@@ -72,6 +76,7 @@ class ProcessC_Env:
         }
 
     def reset(self):
+        """Reset machines, queue, stats, and event logs."""
         self.machines = {
             i: ProcessC_Machine(i, batch_size=self.batch_size_C)
             for i in range(self.num_machines)
@@ -90,6 +95,7 @@ class ProcessC_Env:
         }
 
     def add_tasks(self, tasks: List[Task], current_time: Optional[int] = None):
+        """Add tasks to C queue and emit queue arrival events."""
         queue_time = 0 if current_time is None else int(current_time)
         for task in tasks:
             task.location = "QUEUE_C"
@@ -108,6 +114,7 @@ class ProcessC_Env:
         self.wait_pool.extend(tasks)
 
     def _normalize_uids(self, raw_uids: Any) -> List[int]:
+        """Normalize raw UID list into integer UIDs."""
         if not isinstance(raw_uids, list):
             return []
         normalized: List[int] = []
@@ -119,6 +126,7 @@ class ProcessC_Env:
         return normalized
 
     def _extract_pack_request(self, actions: Dict[str, Any]) -> Tuple[List[int], str, str]:
+        """Extract pack request from supported action formats."""
         # Supports:
         # {"task_uids": [...]}
         # {"C_0": {"task_uids": [...], "reason": "..."}}
@@ -143,6 +151,11 @@ class ProcessC_Env:
         current_time: int,
         actions: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """Advance process C by one step.
+
+        Example:
+        `{"C_0": {"task_uids": [11, 12, 13, 14], "reason": "batch_ready"}}`
+        """
         completed_packs: List[Task] = []
         actions = actions or {}
 
@@ -222,6 +235,7 @@ class ProcessC_Env:
         }
 
     def _get_pairwise_compat(self, task_i: Task, task_j: Task) -> float:
+        """Compute average compatibility score for one task pair."""
         mat_i = getattr(task_i, "material_type", "plastic")
         mat_j = getattr(task_j, "material_type", "plastic")
         key_mat = (mat_i, mat_j) if (mat_i, mat_j) in self.compatibility_matrix else (mat_j, mat_i)
@@ -239,6 +253,7 @@ class ProcessC_Env:
         return (mat_compat + color_compat) / 2
 
     def _compute_compatibility(self, tasks: List[Task]) -> float:
+        """Compute geometric-mean compatibility over all task pairs."""
         if len(tasks) < 2:
             return 1.0
 
@@ -253,6 +268,7 @@ class ProcessC_Env:
         return compat_product ** (1 / n_pairs)
 
     def _create_pack_info(self, pack: List[Task], current_time: int) -> Dict[str, Any]:
+        """Build aggregate metrics for one completed pack."""
         avg_quality = np.mean([getattr(task, "realized_qa_B", 50) for task in pack])
         avg_compat = self._compute_compatibility(pack)
         wait_times = [current_time - getattr(task, "arrival_time", current_time) for task in pack]
@@ -267,6 +283,7 @@ class ProcessC_Env:
         }
 
     def _update_stats(self, pack_info: Dict[str, Any]):
+        """Update running averages using one pack summary."""
         n = self.stats["total_packs"]
         self.stats["total_packs"] += 1
         self.stats["total_tasks_packed"] += pack_info["task_count"]
@@ -282,6 +299,7 @@ class ProcessC_Env:
         )
 
     def get_state(self) -> Dict[str, Any]:
+        """Return compact queue/packing metrics for process C."""
         return {
             "queue_size": len(self.wait_pool),
             "completed_packs": self.pack_count,

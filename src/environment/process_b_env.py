@@ -230,6 +230,8 @@ class ProcessB_Env:
         tasks_to_remove: List[Tuple[str, Task]] = []
         if actions:
             allocated_uids = set()
+            wait_pool_by_uid = {task.uid: task for task in self.wait_pool}
+            rework_pool_by_uid = {task.uid: task for task in self.rework_pool}
 
             for machine_key, assignment in actions.items():
                 if not isinstance(assignment, dict):
@@ -255,13 +257,13 @@ class ProcessB_Env:
                         break
                     local_uids.add(uid)
 
-                    rework_task = next((task for task in self.rework_pool if task.uid == uid), None)
+                    rework_task = rework_pool_by_uid.get(uid)
                     if rework_task is not None:
                         batch.append(rework_task)
                         pending_removals.append(("rework", rework_task))
                         continue
 
-                    wait_task = next((task for task in self.wait_pool if task.uid == uid), None)
+                    wait_task = wait_pool_by_uid.get(uid)
                     if wait_task is not None:
                         batch.append(wait_task)
                         pending_removals.append(("wait", wait_task))

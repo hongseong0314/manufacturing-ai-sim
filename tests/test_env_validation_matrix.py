@@ -3,11 +3,17 @@ import random
 import numpy as np
 import io
 import contextlib
+import warnings
 from typing import List, Dict, Any
 
+from src.agents.default_meta_scheduler import DefaultMetaScheduler
 from src.agents.factory import build_meta_scheduler
 from src.environment.manufacturing_env import ManufacturingEnv
+from src.environment.process_c_env import ProcessC_Env
 from src.objects import Task
+from src.schedulers.packers_c import FIFOPacker
+from src.tuners.tuners_a import FIFOTuner as AFIFOTuner
+from src.tuners.tuners_b import FIFOTuner as BFIFOTuner
 
 
 def _seed_all(random_seed: int, np_seed: int = None):
@@ -419,6 +425,245 @@ def test_no_artificial_dead_time_in_a_and_b_when_backlog_exists():
         assert cur_start == prev_end, (
             f"[Timing] Artificial dead-time in B_0: prev_end={prev_end}, cur_start={cur_start}"
         )
+
+
+def test_c_warns_when_num_machines_c_exceeds_single_pack_runtime():
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        ManufacturingEnv(
+            {
+                "num_machines_A": 1,
+                "num_machines_B": 1,
+                "num_machines_C": 2,
+            }
+        )
+
+    messages = [str(entry.message) for entry in caught]
+    assert any(
+        "num_machines_C > 1" in message and "single-pack-per-step" in message
+        for message in messages
+    ), "[C-Semantics] Expected warning for num_machines_C > 1 in single-pack mode."
+
+
+def test_c_warns_when_process_time_c_is_nonzero_but_inactive():
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        ManufacturingEnv(
+            {
+                "num_machines_A": 1,
+                "num_machines_B": 1,
+                "num_machines_C": 1,
+                "process_time_C": 5,
+            }
+        )
+
+    messages = [str(entry.message) for entry in caught]
+    assert any(
+        "process_time_C" in message and "not active" in message
+        for message in messages
+    ), "[C-Semantics] Expected warning when nonzero process_time_C is configured."
+
+
+def test_decision_state_contains_c_capabilities():
+    cfg = {"num_machines_A": 1, "num_machines_B": 1, "num_machines_C": 2}
+    env = ManufacturingEnv(cfg)
+    env.reset(seed_initial_tasks=False)
+    state = env.get_decision_state()
+
+    capabilities = state["C"].get("capabilities", {})
+    required_keys = {"single_pack_per_step", "multi_machine_active", "max_packs_per_step"}
+    assert required_keys.issubset(set(capabilities.keys())), (
+        f"[StateAPI] Missing C capability keys: {required_keys - set(capabilities.keys())}"
+    )
+    assert capabilities["single_pack_per_step"] is True
+    assert capabilities["multi_machine_active"] is False
+    assert capabilities["max_packs_per_step"] == 1
+
+
+def test_scheduler_context_hook_supports_legacy_and_context_aware_scheduler():
+    class LegacyScheduler:
+        def select_batch(self, wait_pool_uids, rework_pool_uids, batch_size):
+            if rework_pool_uids:
+                return rework_pool_uids[:batch_size], "rework"
+            if wait_pool_uids:
+                return wait_pool_uids[:batch_size], "new"
+            return None, None
+
+    class DueDateContextScheduler(LegacyScheduler):
+        def select_batch_with_context(
+            self,
+            wait_pool_uids,
+            rework_pool_uids,
+            batch_size,
+            context=None,
+        ):
+            context = context or {}
+            rework_rows = context.get("rework_pool_tasks", [])
+            if rework_rows:
+                selected = sorted(rework_rows, key=lambda row: row.get("due_date", 0))
+                return [int(row["uid"]) for row in selected[:batch_size]], "rework"
+
+            wait_rows = context.get("wait_pool_tasks", [])
+            if wait_rows:
+                selected = sorted(wait_rows, key=lambda row: row.get("due_date", 0))
+                return [int(row["uid"]) for row in selected[:batch_size]], "new"
+            return None, None
+
+    cfg = {
+        "num_machines_A": 1,
+        "num_machines_B": 1,
+        "num_machines_C": 1,
+        "batch_size_A": 1,
+    }
+    env = ManufacturingEnv(cfg)
+    task_late = Task(uid=7001, job_id="J1", due_date=200, spec_a=(45.0, 55.0))
+    task_early = Task(uid=7002, job_id="J2", due_date=10, spec_a=(45.0, 55.0))
+    env.reset(seed_initial_tasks=False, initial_tasks=[task_late, task_early])
+    state = env.get_decision_state()
+
+    legacy_meta = DefaultMetaScheduler(
+        scheduler_a=LegacyScheduler(),
+        scheduler_b=LegacyScheduler(),
+        tuner_a=AFIFOTuner(cfg),
+        tuner_b=BFIFOTuner(cfg),
+        packer_c=FIFOPacker(cfg),
+    )
+    legacy_actions = legacy_meta.decide(state)
+    assert legacy_actions["A"]["A_0"]["task_uids"] == [7001], (
+        "[ContextHook] Legacy scheduler path should remain unchanged."
+    )
+
+    context_meta = DefaultMetaScheduler(
+        scheduler_a=DueDateContextScheduler(),
+        scheduler_b=DueDateContextScheduler(),
+        tuner_a=AFIFOTuner(cfg),
+        tuner_b=BFIFOTuner(cfg),
+        packer_c=FIFOPacker(cfg),
+    )
+    context_actions = context_meta.decide(state)
+    assert context_actions["A"]["A_0"]["task_uids"] == [7002], (
+        "[ContextHook] Context-aware scheduler should use due-date from context payload."
+    )
+
+
+def test_reset_seed_reproducibility_for_initial_state_and_short_trace():
+    cfg = {
+        "num_machines_A": 1,
+        "num_machines_B": 1,
+        "num_machines_C": 1,
+        "deterministic_mode": False,
+        "batch_size_C": 1,
+        "min_queue_size": 1,
+        "max_steps": 20,
+    }
+
+    def run_trace(seed_value: int):
+        env = ManufacturingEnv(cfg)
+        meta = build_meta_scheduler(env.config)
+        env.reset(seed=seed_value)
+
+        initial_signature = [
+            (
+                task.uid,
+                task.job_id,
+                task.due_date,
+                tuple(task.spec_a),
+                tuple(task.spec_b),
+                task.material_type,
+                task.color,
+            )
+            for task in env.env_A.wait_pool[:8]
+        ]
+
+        trace = []
+        for _ in range(8):
+            obs, reward, _, _ = _step_with_meta(env, meta)
+            trace.append(
+                (
+                    obs["time"],
+                    obs["A_state"]["wait_pool_size"],
+                    obs["B_state"]["wait_pool_size"],
+                    obs["C_state"]["queue_size"],
+                    obs["num_completed"],
+                    reward,
+                )
+            )
+
+        event_sizes = (
+            len(env.env_A.event_log),
+            len(env.env_B.event_log),
+            len(env.env_C.event_log),
+        )
+        return initial_signature, trace, event_sizes
+
+    run1 = run_trace(seed_value=1234)
+    run2 = run_trace(seed_value=1234)
+    assert run1 == run2, "[Seed] Same reset seed should reproduce initial tasks and short trace."
+
+
+def test_process_c_default_and_opt_in_multi_pack_behavior():
+    tasks_default = _build_tasks(2, start_uid=8000)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        env_default = ProcessC_Env(
+            {"num_machines_C": 2, "batch_size_C": 1, "max_packs_per_step": 1}
+        )
+    env_default.add_tasks(tasks_default, current_time=0)
+    result_default = env_default.step(
+        current_time=0,
+        actions={
+            "C_0": {"task_uids": [8000], "reason": "test"},
+            "C_1": {"task_uids": [8001], "reason": "test"},
+        },
+    )
+    assert len(result_default["completed"]) == 1, (
+        "[C-MultiPack] Default mode should complete at most one pack per step."
+    )
+    assert env_default.pack_count == 1
+
+    tasks_multi = _build_tasks(2, start_uid=8100)
+    env_multi = ProcessC_Env(
+        {"num_machines_C": 2, "batch_size_C": 1, "max_packs_per_step": 2}
+    )
+    env_multi.add_tasks(tasks_multi, current_time=0)
+    result_multi = env_multi.step(
+        current_time=0,
+        actions={
+            "C_0": {"task_uids": [8100], "reason": "test"},
+            "C_1": {"task_uids": [8101], "reason": "test"},
+        },
+    )
+    assert len(result_multi["completed"]) == 2, (
+        "[C-MultiPack] Opt-in mode should allow multiple packs in one step."
+    )
+    assert env_multi.pack_count == 2
+
+
+def test_meta_scheduler_emits_multi_c_actions_when_opted_in():
+    cfg = {
+        "num_machines_A": 1,
+        "num_machines_B": 1,
+        "num_machines_C": 2,
+        "batch_size_C": 1,
+        "min_queue_size": 1,
+        "max_packs_per_step": 2,
+        "packing_C": "fifo",
+    }
+    env = ManufacturingEnv(cfg)
+    env.reset(seed_initial_tasks=False)
+
+    c_tasks = _build_tasks(2, start_uid=8200)
+    for task in c_tasks:
+        task.realized_qa_B = 50.0
+    env.env_C.add_tasks(c_tasks, current_time=0)
+
+    meta = build_meta_scheduler(env.config)
+    actions = meta.decide(env.get_decision_state())
+    c_actions = actions.get("C", {})
+
+    assert len(c_actions) == 2, (
+        "[Meta-C] Expected two C actions when max_packs_per_step=2 and two machines are available."
+    )
 
 
 if __name__ == '__main__':

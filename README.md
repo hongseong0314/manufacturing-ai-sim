@@ -1,40 +1,25 @@
-# Batch Scheduling
+# Batch Scheduling Toolkit
 
-다중 공정(`A -> B -> C`) 배치 스케줄링 시뮬레이터입니다.  
-현재 구조는 `Env(전이)`와 `Meta Scheduler(의사결정)`를 분리한 형태입니다.
+Extensible manufacturing simulation toolkit with three stages (`A -> B -> C`) and strict external decision control.
 
-## 프로세스 플로우
-아래 다이어그램은 시뮬레이션 프로세스 흐름입니다.
+- `ManufacturingEnv` handles state transitions only.
+- `Meta Scheduler` orchestrates assignments for A/B/C.
+- A/B logic is split into assignment schedulers and recipe tuners.
+- C logic is pack-policy driven (`should_pack`, `select_pack`).
 
 ![Simulation Process Flow](docs/figures/process_flow.png)
 
-## 현재 핵심 동작
-- 공정 오케스트레이션: `A -> B -> C` same-step handoff
-- `ManufacturingEnv`: 상태 전이/핸드오프/시간 증가만 담당
-- `Meta Scheduler`: 공정별 액션 생성 담당
-- A/B: `Assignment Scheduler(select_batch)` + `Recipe Tuner(get_recipe)` 분리
-- C: `Packer(should_pack/select_pack)` 정책
-- 환경 리셋 옵션:
-- `env.reset()` : 기존 기본 동작 유지(초기 Task 자동 주입)
-- `env.reset(seed_initial_tasks=False)` : 빈 큐로 시작
-- `env.reset(initial_tasks=[...])` : 지정 Task만 주입
-- 검증: 이벤트 로그 기반 동기/흐름 검증
-- 시각화: 테스트 실행 결과로 direct Gantt PNG 생성
+## Core Architecture
+- `src/environment/manufacturing_env.py`: top-level environment orchestration and handoff.
+- `src/environment/process_a_env.py`: process A transition + QA.
+- `src/environment/process_b_env.py`: process B transition + QA.
+- `src/environment/process_c_env.py`: process C packing/finalization.
+- `src/agents/default_meta_scheduler.py`: baseline external orchestration policy.
+- `src/agents/factory.py`: scheduler/tuner/packer stack builder from config.
+- `src/schedulers/`: assignment schedulers and C packers.
+- `src/tuners/`: recipe tuning policies for A/B.
 
-## 주요 파일
-- `src/environment/manufacturing_env.py` : 상위 환경 오케스트레이션(전이 전용)
-- `src/environment/process_a_env.py` : A 공정
-- `src/environment/process_b_env.py` : B 공정
-- `src/environment/process_c_env.py` : C 공정
-- `src/agents/default_meta_scheduler.py` : 기본 Meta Scheduler
-- `src/agents/factory.py` : config 기반 Meta Scheduler 조립
-- `src/schedulers/schedulers_a.py`, `src/schedulers/schedulers_b.py` : A/B 할당 정책
-- `src/tuners/tuners_a.py`, `src/tuners/tuners_b.py` : A/B 레시피 튜너
-- `src/schedulers/packers_c.py` : C 패킹 정책
-- `tests/test_gantt_validation.py` : 시나리오 검증 + direct Gantt 생성
-- `scripts/generate_gantt_chart_v3.py` : 이벤트 검증 리포트 유틸
-
-## 실행 패턴 (권장)
+## Runtime Loop (Recommended)
 ```python
 from src.environment.manufacturing_env import ManufacturingEnv
 from src.agents.factory import build_meta_scheduler
@@ -50,27 +35,31 @@ while not done:
     obs, reward, done, info = env.step(actions)
 ```
 
-## 실행
+## Installation
+Minimal runtime dependencies:
 ```bash
-conda run -n batch_env python tests/test_gantt_validation.py
+pip install -r requirements.txt
 ```
 
-## 결과물
-테스트 실행 후 `results/` 경로에 아래 파일이 생성됩니다.
-- `scenario1_gantt_direct.png`
-- `scenario2_gantt_direct.png`
-- `scenario3_gantt_direct.png`
-- `scenario4_gantt_direct.png`
+Exact locked environment (for strict reproduction):
+```bash
+pip install -r requirements.lock.txt
+```
 
-## 문제 정의/설계 문서
-- [A Problem](docs/model_a_problem_definition.md)
-- [A Algorithm](docs/model_a_algorithm_design.md)
-- [B Problem](docs/model_b_problem_definition.md)
-- [B Algorithm](docs/model_b_algorithm_design.md)
-- [C Problem](docs/model_c_problem_definition.md)
-- [C Algorithm](docs/model_c_algorithm_design.md)
-- [System Event Generation](docs/system_event_generation.md)
+## Validation
+```bash
+conda run -n batch_env python -m tests.test_env_validation_matrix
+conda run -n batch_env python -m tests.test_integration
+conda run -n batch_env python -m tests.test_gantt_validation
+conda run -n batch_env python -m tests.simple_debug_test
+```
 
-## 운영 가이드 문서
-- `docs/PROJECT_GUIDE.md` : 아키텍처/동작/설계 요약
-- `docs/VALIDATION_GUIDE.md` : 검증 정책, 시나리오, Gantt 해석
+Generated figures are saved under `results/`.
+
+## Documentation
+- `docs/EXTENSIBLE_MANUFACTURING_SIMULATION_GUIDE.md`
+- `docs/PROJECT_GUIDE.md`
+- `docs/VALIDATION_GUIDE.md`
+- `docs/model_a_problem_definition.md`
+- `docs/model_b_problem_definition.md`
+- `docs/model_c_problem_definition.md`

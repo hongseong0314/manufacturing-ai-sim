@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Process C environment (packing/finalization)."""
 
+import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -14,12 +15,21 @@ class ProcessC_Env:
     def __init__(self, config: Dict[str, Any]):
         """Initialize process-C queueing/packing state."""
         self.config = config
-        self.num_machines = config.get("num_machines_C", 1)
+        try:
+            num_machines = int(config.get("num_machines_C", 1))
+        except (TypeError, ValueError):
+            num_machines = 1
+        self.num_machines = max(1, num_machines)
         try:
             batch_size = int(config.get("batch_size_C", config.get("N_pack", 4)))
         except (TypeError, ValueError):
             batch_size = 4
         self.batch_size_C = max(1, batch_size)
+        try:
+            max_packs = int(config.get("max_packs_per_step", 1))
+        except (TypeError, ValueError):
+            max_packs = 1
+        self.max_packs_per_step = max(1, max_packs)
         self.machines: Dict[int, ProcessC_Machine] = {
             i: ProcessC_Machine(i, batch_size=self.batch_size_C)
             for i in range(self.num_machines)
@@ -49,6 +59,8 @@ class ProcessC_Env:
         }
         self.event_log: List[Dict[str, Any]] = []
         self.compatibility_matrix = self._init_compatibility_matrix()
+        self.capabilities = self._build_capabilities()
+        self._warn_on_semantic_mismatch()
 
     def _init_compatibility_matrix(self) -> Dict[Tuple[str, str], float]:
         """Build material/color compatibility lookup table."""
@@ -74,6 +86,42 @@ class ProcessC_Env:
             ("green", "blue"): 0.7,
             ("green", "green"): 1.0,
         }
+
+    def _build_capabilities(self) -> Dict[str, Any]:
+        """Return runtime capability flags exposed to decision-state consumers."""
+        multi_machine_active = self.num_machines > 1 and self.max_packs_per_step > 1
+        return {
+            "single_pack_per_step": self.max_packs_per_step == 1,
+            "multi_machine_active": multi_machine_active,
+            "max_packs_per_step": self.max_packs_per_step,
+        }
+
+    def _warn_on_semantic_mismatch(self):
+        """Emit one-time warnings for potentially misleading C config options."""
+        if self.num_machines > 1 and self.max_packs_per_step == 1:
+            warnings.warn(
+                (
+                    "ProcessC_Env: num_machines_C > 1 but current runtime is single-pack-per-step. "
+                    "Set max_packs_per_step > 1 to activate multi-machine packing."
+                ),
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+        raw_process_time_c = self.config.get("process_time_C", 0)
+        try:
+            process_time_c = int(raw_process_time_c)
+        except (TypeError, ValueError):
+            process_time_c = 0
+        if process_time_c != 0:
+            warnings.warn(
+                (
+                    "ProcessC_Env: process_time_C is configured but not active in the current "
+                    "instant-pack C transition model."
+                ),
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     def reset(self):
         """Reset machines, queue, stats, and event logs."""
@@ -125,26 +173,100 @@ class ProcessC_Env:
                 return []
         return normalized
 
-    def _extract_pack_request(self, actions: Dict[str, Any]) -> Tuple[List[int], str, str]:
-        """Extract pack request from supported action formats."""
-        # Supports:
-        # {"task_uids": [...]}
-        # {"C_0": {"task_uids": [...], "reason": "..."}}
+    def _extract_pack_requests(self, actions: Dict[str, Any]) -> List[Tuple[str, List[int], str]]:
+        """Extract pack requests from supported action formats in stable order."""
+        # Legacy single-machine style:
+        # {"task_uids": [...], "reason": "..."}
         if "task_uids" in actions:
-            return (
-                self._normalize_uids(actions.get("task_uids", [])),
-                "C_0",
-                actions.get("reason", "external_action"),
-            )
+            return [
+                (
+                    "C_0",
+                    self._normalize_uids(actions.get("task_uids", [])),
+                    actions.get("reason", "external_action"),
+                )
+            ]
 
+        requests: List[Tuple[str, List[int], str]] = []
+        # Dict insertion order is preserved in Python 3.7+.
         for machine_key, assignment in actions.items():
             if not isinstance(assignment, dict):
                 continue
             task_uids = self._normalize_uids(assignment.get("task_uids", []))
-            if task_uids:
-                return task_uids, str(machine_key), assignment.get("reason", "external_action")
+            if not task_uids:
+                continue
+            requests.append(
+                (
+                    str(machine_key),
+                    task_uids,
+                    assignment.get("reason", "external_action"),
+                )
+            )
+        return requests
 
-        return [], "C_0", "no_action"
+    def _try_complete_pack(
+        self,
+        current_time: int,
+        machine_id: str,
+        task_uids: List[int],
+        reason: str,
+    ) -> List[Task]:
+        """Try to complete a single pack request and return packed tasks."""
+        if not task_uids:
+            return []
+        if len(task_uids) != len(set(task_uids)):
+            return []
+
+        uid_to_task = {task.uid: task for task in self.wait_pool}
+        selected_pack: List[Task] = []
+        for uid in task_uids:
+            task = uid_to_task.get(uid)
+            if task is None:
+                return []
+            selected_pack.append(task)
+
+        print(f"\n  t={current_time}: Packing start (reason: {reason})")
+        for task in selected_pack:
+            self.wait_pool.remove(task)
+
+        pack_info = self._create_pack_info(selected_pack, current_time)
+        for task in selected_pack:
+            task.location = "COMPLETED"
+            task.pack_id = self.pack_count
+            task.history.append(
+                {
+                    "time": current_time,
+                    "process": "C",
+                    "status": "PACKED",
+                    "pack_id": self.pack_count,
+                    "pack_quality": pack_info["avg_quality"],
+                    "pack_compat": pack_info["avg_compat"],
+                    "wait_time": current_time - getattr(task, "arrival_time", 0),
+                }
+            )
+
+        self.completed_tasks.extend(selected_pack)
+        self.event_log.append(
+            {
+                "timestamp": current_time,
+                "event_type": "pack_completed",
+                "process": "C",
+                "machine_id": machine_id,
+                "task_uids": [t.uid for t in selected_pack],
+                "pack_id": self.pack_count,
+                "start_time": current_time,
+                "end_time": current_time,
+            }
+        )
+
+        self.pack_count += 1
+        self.last_pack_time = current_time
+        self._update_stats(pack_info)
+
+        print(f"    [OK] Pack #{self.pack_count - 1} completed!")
+        print(f"       - Avg Quality: {pack_info['avg_quality']:.2f}")
+        print(f"       - Compatibility: {pack_info['avg_compat']:.2f}")
+        print(f"       - Tasks: {[t.uid for t in selected_pack]}")
+        return selected_pack
 
     def step(
         self,
@@ -159,66 +281,30 @@ class ProcessC_Env:
         completed_packs: List[Task] = []
         actions = actions or {}
 
-        task_uids, machine_id, reason = self._extract_pack_request(actions)
-        if task_uids:
-            if len(task_uids) == len(set(task_uids)):
-                selected_pack: List[Task] = []
-                uid_to_task = {task.uid: task for task in self.wait_pool}
+        pack_requests = self._extract_pack_requests(actions)
+        if pack_requests:
+            step_pack_budget = min(self.max_packs_per_step, self.num_machines)
+            processed_packs = 0
+            used_uids = set()
+            for machine_id, task_uids, reason in pack_requests:
+                if processed_packs >= step_pack_budget:
+                    break
+                if not task_uids:
+                    continue
+                if any(uid in used_uids for uid in task_uids):
+                    continue
 
-                for uid in task_uids:
-                    task = uid_to_task.get(uid)
-                    if task is None:
-                        selected_pack = []
-                        break
-                    selected_pack.append(task)
-
-                if selected_pack:
-                    print(f"\n  t={current_time}: Packing start (reason: {reason})")
-
-                    for task in selected_pack:
-                        self.wait_pool.remove(task)
-
-                    pack_info = self._create_pack_info(selected_pack, current_time)
-
-                    for task in selected_pack:
-                        task.location = "COMPLETED"
-                        task.pack_id = self.pack_count
-                        task.history.append(
-                            {
-                                "time": current_time,
-                                "process": "C",
-                                "status": "PACKED",
-                                "pack_id": self.pack_count,
-                                "pack_quality": pack_info["avg_quality"],
-                                "pack_compat": pack_info["avg_compat"],
-                                "wait_time": current_time - getattr(task, "arrival_time", 0),
-                            }
-                        )
-
-                    completed_packs.extend(selected_pack)
-                    self.completed_tasks.extend(selected_pack)
-
-                    self.event_log.append(
-                        {
-                            "timestamp": current_time,
-                            "event_type": "pack_completed",
-                            "process": "C",
-                            "machine_id": machine_id,
-                            "task_uids": [t.uid for t in selected_pack],
-                            "pack_id": self.pack_count,
-                            "start_time": current_time,
-                            "end_time": current_time,
-                        }
-                    )
-
-                    self.pack_count += 1
-                    self.last_pack_time = current_time
-                    self._update_stats(pack_info)
-
-                    print(f"    [OK] Pack #{self.pack_count - 1} completed!")
-                    print(f"       - Avg Quality: {pack_info['avg_quality']:.2f}")
-                    print(f"       - Compatibility: {pack_info['avg_compat']:.2f}")
-                    print(f"       - Tasks: {[t.uid for t in selected_pack]}")
+                selected_pack = self._try_complete_pack(
+                    current_time=current_time,
+                    machine_id=machine_id,
+                    task_uids=task_uids,
+                    reason=reason,
+                )
+                if not selected_pack:
+                    continue
+                completed_packs.extend(selected_pack)
+                used_uids.update(task.uid for task in selected_pack)
+                processed_packs += 1
 
         if self.wait_pool:
             oldest_arrival = min(

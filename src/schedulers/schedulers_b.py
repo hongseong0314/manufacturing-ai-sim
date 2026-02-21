@@ -27,6 +27,21 @@ class BaseScheduler:
         """Select a batch of task UIDs and task type (`new`/`rework`)."""
         raise NotImplementedError
 
+    def select_batch_with_context(
+        self,
+        wait_pool_uids: List[int],
+        rework_pool_uids: List[int],
+        batch_size: int,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> BatchSelection:
+        """Optional context-aware selection hook.
+
+        Default behavior is backward-compatible and delegates to `select_batch`.
+        Custom schedulers can override this method to use richer task snapshots.
+        """
+        _ = context
+        return self.select_batch(wait_pool_uids, rework_pool_uids, batch_size)
+
     @staticmethod
     def _select_with_rework_priority(
         wait_pool_uids: List[int],

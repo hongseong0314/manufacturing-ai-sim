@@ -551,6 +551,85 @@ def test_scenario_4_forced_rework_tight_spec():
     return env, is_valid
 
 
+def test_scenario_5_dual_c_machine_parallel_packing():
+    """
+    Scenario 5: Dual C-machine packing
+    - num_machines_C=2
+    - max_packs_per_step=2
+    - verify that both C_0 and C_1 are actively used
+    """
+    print("\n" + "=" * 70)
+    print("SCENARIO 5: Dual C-machine parallel packing")
+    print("=" * 70)
+
+    config = {
+        'num_machines_A': 2,
+        'num_machines_B': 2,
+        'num_machines_C': 2,
+        'process_time_A': 8,
+        'process_time_B': 4,
+        'process_time_C': 0,
+        'batch_size_A': 2,
+        'batch_size_B': 2,
+        'batch_size_C': 2,
+        'min_queue_size': 2,
+        'max_packs_per_step': 2,
+        'scheduler_A': 'fifo',
+        'scheduler_B': 'fifo',
+        'packing_C': 'fifo',
+        'max_steps': 60,
+        'deterministic_mode': True,
+    }
+
+    env = ManufacturingEnv(config)
+    meta = build_meta_scheduler(env.config)
+    env.reset(seed_initial_tasks=False)
+
+    random.seed(505)
+    initial_tasks = _generate_initial_tasks(env, count=16, current_time=0)
+    env.env_A.add_tasks(initial_tasks)
+
+    print(f"\n[Setup] {len(initial_tasks)} tasks generated")
+    print("[Setup] C has 2 machines and allows up to 2 packs per step")
+
+    print("\n[Simulation] Start...")
+    for _ in range(config['max_steps']):
+        _step_with_meta(env, meta)
+    print(f"[Simulation] Done (total {config['max_steps']} steps)")
+
+    obs = env._get_observation()
+    print(f"\n[Result] Completed tasks: {obs['num_completed']}")
+    print(f"[Result] C completed packs: {env.env_C.pack_count}")
+
+    c_pack_machines = {
+        str(event.get("machine_id"))
+        for event in env.env_C.event_log
+        if event.get("event_type") == "pack_completed"
+    }
+    print(f"[Result] C pack machines used: {sorted(c_pack_machines)}")
+
+    try:
+        draw_gantt_from_events(
+            env.env_A,
+            env.env_B,
+            env.env_C,
+            output_path=RESULTS_DIR / "scenario5_gantt_direct.png",
+            title="Scenario 5 - Dual C-machine event-based Gantt",
+        )
+    except Exception as e:
+        print(f"[Gantt] Direct gantt chart generation failed: {e}")
+
+    validator = ValidationReport()
+    is_valid = validator.validate_sync(env.env_A, env.env_B, env.env_C, expect_rework=False)
+    validator.print_report()
+
+    assert "C_0" in c_pack_machines and "C_1" in c_pack_machines, (
+        "Scenario 5 should use both C_0 and C_1, but one machine was not observed."
+    )
+
+    return env, is_valid
+
+
 def print_summary(results):
     """Print summary"""
     print("\n" + "=" * 70)
@@ -605,6 +684,14 @@ def main():
         results['Scenario 4: Forced Rework'] = (env4, valid4)
     except Exception as e:
         print(f"Scenario 4 failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+    try:
+        env5, valid5 = test_scenario_5_dual_c_machine_parallel_packing()
+        results['Scenario 5: Dual C Machines'] = (env5, valid5)
+    except Exception as e:
+        print(f"Scenario 5 failed: {e}")
         import traceback
         traceback.print_exc()
 

@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
+import random
 from typing import Any, Dict, Iterable, List, Optional, Set
+
+import numpy as np
 
 from src.data_generator import DataGenerator
 from src.environment.process_a_env import ProcessA_Env
@@ -26,8 +29,17 @@ class ManufacturingEnv:
         self.env_A = ProcessA_Env(self.config)
         self.env_B = ProcessB_Env(self.config)
         self.env_C = ProcessC_Env(self.config)
+        self._stages = self._build_stage_registry()
 
         self.completed_tasks: List[Task] = []
+
+    def _build_stage_registry(self) -> Dict[str, Dict[str, Any]]:
+        """Build internal stage descriptors used by runtime orchestration internals."""
+        return {
+            "A": {"env": self.env_A, "downstream": "B"},
+            "B": {"env": self.env_B, "downstream": "C"},
+            "C": {"env": self.env_C, "downstream": None},
+        }
 
     def _normalize_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize cross-process config keys and safe defaults."""
@@ -48,6 +60,12 @@ class ManufacturingEnv:
         if raw_min_queue <= 0:
             raw_min_queue = 1
         normalized["min_queue_size"] = min(raw_min_queue, batch_size_c)
+
+        try:
+            max_packs_per_step = int(normalized.get("max_packs_per_step", 1))
+        except (TypeError, ValueError):
+            max_packs_per_step = 1
+        normalized["max_packs_per_step"] = max(1, max_packs_per_step)
         return normalized
 
     def _normalize_action_uids(self, raw_uids: Any) -> List[int]:
@@ -123,7 +141,7 @@ class ManufacturingEnv:
     def step(self, actions: Optional[Dict[str, Dict[str, Any]]] = None):
         """Advance A->B->C by one global step using external actions.
 
-        Example action payload (V1):
+        Example action payload:
         {
             "A": {"A_0": {"task_uids": [1, 2], "recipe": [10.0, 2.0, 1.0]}},
             "B": {"B_0": {"task_uids": [3], "recipe": [50.0, 50.0, 30.0]}},
@@ -186,20 +204,25 @@ class ManufacturingEnv:
         self,
         seed_initial_tasks: bool = True,
         initial_tasks: Optional[List[Task]] = None,
+        seed: Optional[int] = None,
     ):
         """Reset full manufacturing environment.
 
         Args:
         - `seed_initial_tasks=True`: generate default initial arrivals for A.
         - `initial_tasks`: explicit initial set (takes precedence when provided).
+        - `seed`: optional seed for Python `random` and NumPy RNG.
         """
+        if seed is not None:
+            random.seed(seed)
+            np.random.seed(seed)
+
         self.time = 0
         self.data_generator = DataGenerator()
         self.completed_tasks = []
 
-        self.env_A.reset()
-        self.env_B.reset()
-        self.env_C.reset()
+        for descriptor in self._stages.values():
+            descriptor["env"].reset()
 
         self._periodic_enabled = bool(seed_initial_tasks)
 
@@ -358,6 +381,7 @@ class ManufacturingEnv:
                 "queue_stats": {"wait_pool_size": len(c_wait_uids)},
                 "last_pack_time": self.env_C.last_pack_time,
                 "pack_count": self.env_C.pack_count,
+                "capabilities": dict(getattr(self.env_C, "capabilities", {})),
             },
         }
 
@@ -376,10 +400,10 @@ if __name__ == "__main__":
         "num_machines_A": 2,
         "num_machines_B": 1,
         "num_machines_C": 1,
-        "process_time_A": 15,
-        "process_time_B": 10,
-        "process_time_C": 20,
-        "max_steps": 50,
+        "process_time_A": 5,
+        "process_time_B": 3,
+        "process_time_C": 4,
+        "max_steps": 200,
     }
 
     env = ManufacturingEnv(env_config)

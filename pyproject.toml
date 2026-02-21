@@ -1,34 +1,15 @@
 # pyproject.toml
 
-# ===================================================================
-# Black (Code Formatter) Configuration
-# ===================================================================
+# Black formatter configuration
 [tool.black]
-# 한 줄의 최대 글자 수
 line-length = 88
-# 대상 Python 버전 (여러 버전 명시 가능)
-target-version = ['py310']
+target-version = ["py310"]
 
-
-# ===================================================================
-# Ruff (Linter) Configuration
-# ===================================================================
+# Ruff linter configuration
 [tool.ruff]
-# 적용할 규칙 세트:
-# E, F: pyflakes (기본 오류)
-# I: isort (import 정렬)
-# B: flake8-bugbear (버그 유발 가능성이 있는 코드)
-# C4: flake8-comprehensions (불필요한 list/dict/set comprehension)
-# A: flake8-builtins (내장 함수 shadowing 방지)
 select = ["E", "F", "I", "B", "C4", "A"]
-
-# 무시할 규칙
 ignore = []
-
-# 자동 수정이 불가능한 규칙에 대한 경고 표시
 unfixable = ["B"]
-
-# 제외할 파일 및 폴더
 exclude = [
     ".bzr",
     ".direnv",
@@ -50,13 +31,8 @@ exclude = [
     "node_modules",
     "venv",
 ]
-
-# 한 줄의 최대 글자 수 (black과 일치)
 line-length = 88
-
-# 대상 Python 버전
 target-version = "py310"
 
 [tool.ruff.mccabe]
-# 코드 복잡도 제한 (기본값: 10)
 max-complexity = 10

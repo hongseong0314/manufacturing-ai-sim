@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Default meta scheduler implementation."""
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.agents.meta_scheduler import BaseMetaScheduler
 from src.objects import Task
@@ -41,6 +41,59 @@ class DefaultMetaScheduler(BaseMetaScheduler):
             ordered.append(uid)
         return ordered
 
+    @staticmethod
+    def _build_scheduler_context(
+        wait_candidates: List[int],
+        rework_candidates: List[int],
+        tasks_state: Dict[int, Dict[str, Any]],
+        machine_state: Dict[str, Any],
+        queue_info: Dict[str, Any],
+        current_time: int,
+    ) -> Dict[str, Any]:
+        """Build context payload for optional scheduler context hook."""
+        wait_pool_tasks = [tasks_state[uid] for uid in wait_candidates if uid in tasks_state]
+        rework_pool_tasks = [tasks_state[uid] for uid in rework_candidates if uid in tasks_state]
+        tasks_by_uid = {
+            uid: tasks_state[uid]
+            for uid in DefaultMetaScheduler._dedupe_preserve_order(
+                rework_candidates + wait_candidates
+            )
+            if uid in tasks_state
+        }
+        return {
+            "wait_pool_tasks": wait_pool_tasks,
+            "rework_pool_tasks": rework_pool_tasks,
+            "tasks_by_uid": tasks_by_uid,
+            "machine_state": machine_state,
+            "queue_info": queue_info,
+            "current_time": current_time,
+        }
+
+    @staticmethod
+    def _select_batch_with_optional_context(
+        scheduler: Any,
+        wait_candidates: List[int],
+        rework_candidates: List[int],
+        batch_size: int,
+        context: Dict[str, Any],
+    ) -> Tuple[Optional[List[int]], Optional[str]]:
+        """Call scheduler context hook when available, with safe fallback."""
+        context_selector = getattr(scheduler, "select_batch_with_context", None)
+        if callable(context_selector):
+            selection = context_selector(
+                wait_candidates,
+                rework_candidates,
+                batch_size,
+                context=context,
+            )
+        else:
+            selection = scheduler.select_batch(wait_candidates, rework_candidates, batch_size)
+
+        if not selection:
+            return None, None
+        selected_uids, task_type = selection
+        return selected_uids, task_type
+
     def _plan_ab_process(
         self,
         process_state: Dict[str, Any],
@@ -49,7 +102,8 @@ class DefaultMetaScheduler(BaseMetaScheduler):
         tuner: Any,
         current_time: int,
     ) -> Dict[str, Dict[str, Any]]:
-        """Plan machine assignments for process A or B."""
+        """Plan machine assignments for process A or B. 
+        스케쥴러 형태에 따라서 이 함수는 바뀔 수 있음 예를들어 machine x task에 대한 matrix action이 가능하면 scheduler에서 바로 machine x task 매핑을 리턴하는 형태로 바꿀 수 있음."""
         planned: Dict[str, Dict[str, Any]] = {}
         allocated_uids = set()
 
@@ -79,10 +133,20 @@ class DefaultMetaScheduler(BaseMetaScheduler):
                 "rework_queue_size": len(rework_candidates),
             }
             batch_size = int(machine_state.get("batch_size", 1))
-            selected_uids, task_type = scheduler.select_batch(
+            scheduler_context = self._build_scheduler_context(
                 wait_candidates,
                 rework_candidates,
-                batch_size,
+                tasks_state,
+                machine_state,
+                queue_info,
+                current_time,
+            )
+            selected_uids, task_type = self._select_batch_with_optional_context(
+                scheduler=scheduler,
+                wait_candidates=wait_candidates,
+                rework_candidates=rework_candidates,
+                batch_size=batch_size,
+                context=scheduler_context,
             )
             if not selected_uids:
                 continue
@@ -127,7 +191,12 @@ class DefaultMetaScheduler(BaseMetaScheduler):
         task.realized_qa_B = float(row.get("realized_qa_B", -1.0))
         return task
 
-    def _plan_c_process(self, c_state: Dict[str, Any], tasks_state: Dict[int, Dict[str, Any]], current_time: int) -> Dict[str, Dict[str, Any]]:
+    def _plan_c_process(
+        self,
+        c_state: Dict[str, Any],
+        tasks_state: Dict[int, Dict[str, Any]],
+        current_time: int,
+    ) -> Dict[str, Dict[str, Any]]:
         """Plan C packing actions using queue + incoming B handoff hints."""
         planned: Dict[str, Dict[str, Any]] = {}
         wait_pool_uids = list(c_state.get("wait_pool_uids", []))
@@ -153,32 +222,67 @@ class DefaultMetaScheduler(BaseMetaScheduler):
         if not wait_pool_tasks:
             return planned
 
-        should_pack, reason = self.packer_c.should_pack(
-            wait_pool_tasks,
-            current_time,
-            int(c_state.get("last_pack_time", 0)),
-        )
-        force_timeout_pack = False
-        if not should_pack and wait_pool_tasks:
-            oldest_arrival = min(getattr(task, "arrival_time", current_time) for task in wait_pool_tasks)
-            force_timeout_pack = current_time - oldest_arrival > self.packer_c.max_wait_time
+        machines_state = c_state.get("machines", {})
+        available_machine_ids: List[str] = []
+        for machine_id, machine_state in sorted(machines_state.items()):
+            status = machine_state.get("status")
+            try:
+                finish_time = int(machine_state.get("finish_time", -1))
+            except (TypeError, ValueError):
+                finish_time = -1
+            machine_available = status == "idle" or (status == "busy" and finish_time <= current_time)
+            if machine_available:
+                available_machine_ids.append(machine_id)
+        if not available_machine_ids:
+            available_machine_ids = ["C_0"]
 
-        if not should_pack and not force_timeout_pack:
-            return planned
+        capabilities = c_state.get("capabilities", {})
+        try:
+            max_packs_per_step = int(capabilities.get("max_packs_per_step", 1))
+        except (TypeError, ValueError):
+            max_packs_per_step = 1
+        max_packs_per_step = max(1, max_packs_per_step)
+        planning_budget = min(max_packs_per_step, len(available_machine_ids))
 
-        selected_pack = self.packer_c.select_pack(list(wait_pool_tasks), current_time)
-        if not selected_pack:
-            return planned
+        remaining_tasks = list(wait_pool_tasks)
+        planned_count = 0
+        last_pack_time = int(c_state.get("last_pack_time", 0))
+        for machine_id in available_machine_ids:
+            if planned_count >= planning_budget:
+                break
+            if not remaining_tasks:
+                break
 
-        machine_id = "C_0"
-        machines = c_state.get("machines", {})
-        if machines:
-            machine_id = sorted(machines.keys())[0]
+            should_pack, reason = self.packer_c.should_pack(
+                remaining_tasks,
+                current_time,
+                last_pack_time,
+            )
 
-        planned[machine_id] = {
-            "task_uids": [task.uid for task in selected_pack],
-            "reason": reason if should_pack else "timeout_fallback",
-        }
+            force_timeout_pack = False
+            if not should_pack and remaining_tasks:
+                oldest_arrival = min(
+                    getattr(task, "arrival_time", current_time) for task in remaining_tasks
+                )
+                force_timeout_pack = current_time - oldest_arrival > self.packer_c.max_wait_time
+
+            if not should_pack and not force_timeout_pack:
+                break
+
+            selected_pack = self.packer_c.select_pack(list(remaining_tasks), current_time)
+            if not selected_pack:
+                break
+
+            selected_uids = [task.uid for task in selected_pack]
+            planned[machine_id] = {
+                "task_uids": selected_uids,
+                "reason": reason if should_pack else "timeout_fallback",
+            }
+            selected_uid_set = set(selected_uids)
+            remaining_tasks = [task for task in remaining_tasks if task.uid not in selected_uid_set]
+            planned_count += 1
+            last_pack_time = current_time
+
         return planned
 
     def decide(self, state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:

@@ -16,6 +16,8 @@ The default production path is `A -> B -> C`, but the architecture is intentiona
 
 This handbook is chapterized and implementation-oriented. It explains both what exists today and how to extend it safely.
 
+For an empirical walkthrough of the Process A physical model — including degradation curves, recipe sensitivity, and control loop simulation — see `notebooks/01_Process_A_example.ipynb`. The figures in Chapter 3 are generated from that notebook.
+
 ![Simulation Process Flow](figures/process_flow.png)
 
 ## Table of Contents
@@ -26,7 +28,7 @@ This handbook is chapterized and implementation-oriented. It explains both what 
 4. [Chapter 2. Runtime Semantics and Data Contracts](#chapter-2-runtime-semantics-and-data-contracts)
 5. [Chapter 3. Environment Internals and Physical-Model Customization](#chapter-3-environment-internals-and-physical-model-customization)
 6. [Chapter 4. Scheduling Research Extension Space (Manufacturing-First)](#chapter-4-scheduling-research-extension-space-manufacturing-first)
-7. [Chapter 5. Tuner and APC Research Extension Space (LLM-Integrated)](#chapter-5-tuner-and-apc-research-extension-space-llm-integrated)
+7. [Chapter 5. Tuner and APC Research Extension Space](#chapter-5-tuner-and-apc-research-extension-space-llm-integrated)
 8. [Chapter 6. Packing and Multi-Objective Design in Process C](#chapter-6-packing-and-multi-objective-design-in-process-c)
 9. [Chapter 7. Extension Playbooks (Engineering Procedures)](#chapter-7-extension-playbooks-engineering-procedures)
 10. [Chapter 8. Case Study Pack (Implementation-Ready Experiments)](#chapter-8-case-study-pack-implementation-ready-experiments)
@@ -49,9 +51,11 @@ In five minutes, you should be able to:
 
 ### Step 1. Environment check
 
+Activate your Python environment (conda, venv, or system Python), then run:
+
 ```bash
-conda run -n batch_env python -V
-conda run -n batch_env python -m tests.test_env_validation_matrix
+python --version
+python -m tests.test_env_validation_matrix
 ```
 
 Expected outcome:
@@ -60,7 +64,7 @@ Expected outcome:
 ### Step 2. Run a scenario-level integration
 
 ```bash
-conda run -n batch_env python -m tests.test_gantt_validation
+python -m tests.test_gantt_validation
 ```
 
 Expected outcome:
@@ -197,10 +201,20 @@ At each `env.step(actions)`:
 ```python
 {
   "A": {
-    "A_0": {"task_uids": [1, 2], "recipe": [10.0, 2.0, 1.0], "task_type": "new"}
+    "A_0": {
+      "task_uids": [1, 2],
+      "recipe": [10.0, 2.0, 1.0],     # [s1, s2, s3]
+      "task_type": "new",              # "new" or "rework"
+      "replace_consumable": False,     # True → replace consumable before this batch
+    }
   },
   "B": {
-    "B_0": {"task_uids": [3], "recipe": [50.0, 50.0, 30.0], "task_type": "rework"}
+    "B_0": {
+      "task_uids": [3],
+      "recipe": [50.0, 50.0, 30.0],   # [r1, r2, r3]
+      "task_type": "rework",
+      "replace_solution": False,       # True → replace solution before this batch
+    }
   },
   "C": {
     "C_0": {"task_uids": [4, 5, 6, 7], "reason": "batch_ready"}
@@ -223,10 +237,77 @@ At each `env.step(actions)`:
 - Rework count is non-decreasing.
 - Strict external control: no action means no new dispatching.
 
+### 2.6 Job arrival and periodic generation
+
+Periodic task generation is controlled inside `ManufacturingEnv.step()` in
+`src/environment/manufacturing_env.py`. The relevant code segment:
+
+```python
+# src/environment/manufacturing_env.py — step(), periodic injection
+if getattr(self, "_periodic_enabled", True) and self.time > 0 and self.time % 30 == 0:
+    new_tasks = self.data_generator.generate_new_jobs(self.time)
+    self.env_A.add_tasks(new_tasks)
+```
+
+**To change the arrival period:**
+Edit `self.time % 30 == 0` directly in `manufacturing_env.py`.
+For a config-driven period, add `arrival_period = config.get("arrival_period", 30)` to
+`__init__` and replace the hardcoded `30` with `self.arrival_period`.
+
+**Arrival patterns you can model:**
+
+| Pattern | Implementation hint |
+|---|---|
+| Fixed period (default) | `self.time % N == 0` |
+| Poisson arrivals | `np.random.poisson(lam=1) > 0` per step with variable batch sizes |
+| Burst arrivals | inject large batches at specific time windows |
+| Demand-driven | trigger on queue length falling below threshold |
+
+**To disable periodic arrivals entirely:**
+Call `env.reset(seed_initial_tasks=False)` and inject tasks manually via
+`env.env_A.add_tasks(tasks)` at any time. The `_periodic_enabled` flag controls
+whether automatic injection runs during `step()`.
+
+### 2.7 Environment reset and initial task injection
+
+`ManufacturingEnv.reset()` accepts two optional parameters that control how the
+environment is initialized at the start of each episode:
+
+```python
+reset(
+    seed_initial_tasks: bool = True,
+    initial_tasks: Optional[List[Task]] = None,
+    seed: Optional[int] = None,
+)
+```
+
+| Parameter combination | Behavior |
+|---|---|
+| `seed_initial_tasks=True, initial_tasks=None` | Auto-generate and inject initial tasks (default) |
+| `initial_tasks=[task1, task2, ...]` | Inject only the specified tasks into the A queue (scenario control) |
+| `seed_initial_tasks=False, initial_tasks=None` | Start with an empty queue; inject tasks manually |
+| `seed=<int>` | Sets `random.seed()` and `np.random.seed()` for reproducible stochastic runs |
+
+**Use cases:**
+
+- **Reproducible benchmarks:** pass a fixed `initial_tasks` list to guarantee identical starting conditions across runs.
+- **Curriculum learning:** gradually increase task difficulty by controlling the initial batch.
+- **Scenario testing:** construct corner-case task sets (e.g., all high-priority, all near-deadline) and inject them directly.
+- **Manual injection after reset:** call `env.env_A.add_tasks(tasks)` at any step after `reset()` to supplement the periodic arrival schedule.
+
 ## Chapter 3. Environment Internals and Physical-Model Customization
 
-### Purpose
-Explain where process behavior lives, where equations live, and how to modify them without breaking orchestration.
+### Overview
+
+This simulator abstracts three process types commonly found in real manufacturing lines:
+
+| Process | Real-world manufacturing type | Implementation |
+|---|---|---|
+| **Process A** | Machining / processing step | `src/environment/process_a_env.py` |
+| **Process B** | Chemical cleaning / wet process step | `src/environment/process_b_env.py` |
+| **Process C** | Packaging / bin-packing step | `src/environment/process_c_env.py` |
+
+Each process has its own independent physical model and state variables. The environment is responsible only for state transitions; all decision-making (recipe selection, consumable replacement, batch composition) is delegated to external agents (tuner, scheduler, packer).
 
 ### What You Can Change
 - Physical equations and degradation models in process env modules.
@@ -234,46 +315,370 @@ Explain where process behavior lives, where equations live, and how to modify th
 - Task attributes and compatibility logic.
 
 ### What Stays Invariant
-- Process environments remain responsible for transition semantics.
+- Process environments remain responsible for transition semantics only.
 - `ManufacturingEnv` remains responsible for top-level orchestration and handoff.
 - External action contract remains V1 in this pass.
 
 ### 3.1 Process A (`src/environment/process_a_env.py`)
-A includes age and consumable dynamics (`m_age`, `u`) and computes QA from recipe and model coefficients.
 
-Representative structure:
-- Age-adjusted coefficients.
-- Nonlinear process signal term.
-- Effectiveness reduction with usage.
-- Stochastic noise (unless deterministic mode).
-- Inclusive QA boundary for spec check.
+#### Model Design Rationale
 
-Primary edit points for advanced studies:
-- `_get_physical_model_params(...)`
-- `_run_qa_check(...)`
-- pass/fail boundary definition
+In a typical machining process, output quality is determined by four factors:
+
+```
+quality = f(equipment recipe,  consumable condition,  machine aging,  input material)
+```
+
+For simplicity, **input material is excluded** from this model. The remaining three factors are represented as:
+
+| Real-world factor | Model variable | Role |
+|---|---|---|
+| Equipment recipe | `s1, s2, s3` | Process parameters (decided by tuner) |
+| Consumable wear | `u` (consumable usage) | Accumulated usage degrades effectiveness |
+| Machine aging | `m_age` (machine age) | Linearly degrades model coefficients |
+
+These three variables drive the following quality equations.
+
+#### 3.1.1 Model Equations
+
+```
+g_s           = (w1·s1 + W2_BASE·s2 + W3_BASE·s3 + b) + (w12 · s1 · s2)  # process signal
+effectiveness  = 1 − BETA · tanh(BETA_K · u)                               # consumable decay
+std_dev        = GAMMA · tanh(GAMMA_K · u)                                  # noise growth
+mean_qa        = g_s × effectiveness
+realized_qa    = mean_qa  [deterministic]  or  Normal(mean_qa, std_dev)     [stochastic]
+passed         = spec_a[0] ≤ realized_qa ≤ spec_a[1]
+```
+
+**Physical constants (module-level, `src/environment/process_a_env.py`):**
+
+| Constant | Value | Role |
+|---|---|---|
+| `W1_BASE` | 0.5 | Linear s1 weight |
+| `W2_BASE` | 0.3 | Linear s2 weight |
+| `W3_BASE` | 0.2 | Linear s3 weight |
+| `B_BASE` | 45.0 | Baseline QA offset |
+| `W12_BASE` | 0.01 | s1×s2 interaction strength |
+| `BETA` | 0.2 | Consumable effectiveness decay amplitude |
+| `BETA_K` | 0.1 | Consumable effectiveness decay rate (tanh) |
+| `GAMMA` | 1.5 | Noise amplitude at max usage |
+| `GAMMA_K` | 0.1 | Noise growth rate (tanh) |
+| `DELTA_W1` | 0.001 | w1 degradation rate per unit m_age |
+| `DELTA_W12` | 0.0001 | w12 degradation rate per unit m_age |
+| `DELTA_B` | 0.02 | Baseline shift rate per unit m_age |
+
+Machine-age degradation (`_get_physical_model_params`):
+- `w1 = W1_BASE × (1 − DELTA_W1 × m_age)`
+- `w12 = W12_BASE × (1 − DELTA_W12 × m_age)`
+- `b = B_BASE − DELTA_B × m_age`
+
+Full model exploration and validation: `notebooks/01_Process_A_example.ipynb`
+
+#### 3.1.2 Machine Age Effect
+
+As `m_age` increases all key coefficients degrade (w1↓, w12↓, b↓), lowering the achievable QA ceiling.
+
+![Machine Age Effect](../results/p_a_01_machine_age_effect.png)
+
+*Left: mean QA drops linearly with m_age under fixed recipe and u=5. Right: QA distributions at m_age=0/100/200 show progressive left-shift and eventual spec violation.*
+
+**Takeaway for tuners:** Machine age is an exogenous state that the tuner cannot control. Use the (m_age × u) joint heatmap (Section 3.1.5) to calibrate compensation across both degradation axes simultaneously.
+
+#### 3.1.3 Consumable Usage (u) Effect
+
+Consumable usage degrades `effectiveness` via tanh and amplifies stochastic noise via the same functional form.
+
+![Consumable Usage Effect](../results/p_a_02_consumable_effect.png)
+
+*Left: effectiveness (blue) and std_dev (red) curves vs. u — both saturate toward asymptotes. Center: mean QA decline at fixed recipe [10, 2, 1]. Right: FPR distribution at u=1/10/20 — FPR drops sharply as u grows.*
+
+**Key numbers (default recipe `[10, 2, 1]`, m_age=0):**
+- `u=0` → mean QA ≈ 51.0, FPR ≈ 100%
+- `u=10` → mean QA drops, FPR begins to fall
+- `u=20` → mean QA ≈ 44.2, spec violation risk increases significantly
+
+**Takeaway for tuners:** `u` is the primary short-term degradation lever the tuner can *reset* (not directly control). `should_replace_consumable()` resets u to 0, fully restoring effectiveness. See Section 3.6 for the replacement interface.
+
+#### 3.1.4 Recipe Sensitivity
+
+s1 is the dominant control variable; s2 and s3 have minor and roughly equal influence.
+
+![Recipe Sensitivity](../results/p_a_03_recipe_sensitivity.png)
+
+*Sensitivity sweeps at m_age=50, u=10. s1 drives ΔQA ≈ 25.5 over its range; s2 ΔQA ≈ 2.5; s3 ΔQA ≈ 1.5. Green PASS region shown per variable.*
+
+**Takeaway for tuners:** Adaptive tuners should focus compensation on s1 first. The s1 PASS window narrows as u increases — this is the core dynamic that tuner design must address.
+
+#### 3.1.5 Joint (m_age × u) State Space
+
+The combined effect of machine age and consumable usage determines whether any recipe can hit spec.
+
+![m_age × u Joint Heatmap](../results/p_a_04_joint_heatmap.png)
+
+*Left: continuous mean QA heatmap — blue contour lines mark spec boundaries [45, 55]. Right: binary PASS/FAIL map under default recipe. Red = consumable replacement or recipe compensation required.*
+
+**Takeaway for tuner design:** The FAIL region in the binary map defines the safety boundary for `should_replace_consumable()`. The default threshold (u ≥ 10) approximates the onset of FPR degradation under the default recipe; this can be calibrated per-equipment or made adaptive via the config key `consumable_replace_threshold`.
+
+#### 3.1.6 Control Loop Simulation — Tuner Role Visualization
+
+The following experiment contrasts two control policies over 60 steps (m_age=50 fixed):
+
+- **[Sim A]** Fixed recipe (s1=10, no tuning) — u accumulates, quality drifts below spec
+- **[Sim B]** Recipe tuning (s1 analytically optimized toward TARGET_QA=50) + consumable replacement when s1 would exceed operational limit S1_OP_MAX=30
+
+![Tuner Control Loop Simulation](../results/p_a_05_tuning_simulation.png)
+
+*Top panel: QA over time. Solid lines = deterministic mean QA; dots = stochastic realized QA. Middle panel: s1 trajectories (Sim B adjusts to compensate; Sim A stays flat). Bottom panel: u tracking (Sim B resets on replacement; Sim A accumulates).*
+
+**Results:**
+
+| Scenario | FPR | Spec failures | Min mean_QA |
+|---|---|---|---|
+| [A] Fixed recipe | 10% | 54 / 60 | **39.86** (well below spec lower bound 45) |
+| [B] Tuning + replacement | **100%** | 0 / 60 | 50.00 |
+
+Sim B triggers 4 consumable replacements (steps 12, 24, 36, 48) with s1 adjusted across [10.5, 29.8].
+
+**Takeaway:** Without tuning, u accumulation drives mean QA below the spec lower bound within ~12 steps. The tuner's two-action strategy — recipe adjustment first, consumable replacement at the operational limit — fully maintains spec compliance. Source: `notebooks/01_Process_A_example.ipynb`, Cell 6.
+
+**Primary edit points:**
+- `_get_physical_model_params(...)` — age-based coefficient degradation
+- `_run_qa_check(...)` — QA computation, noise model, spec check
+- pass/fail boundary (inclusive: `spec_a[0] <= qa <= spec_a[1]`)
 
 ### 3.2 Process B (`src/environment/process_b_env.py`)
-B uses a simplified quality screening model with machine state influence (`v`, `b_age`) and strict boundary checking.
 
-Primary edit points:
-- `_run_qa_check(...)`
-- recipe parsing and defaulting
-- clipping and degradation behavior
+Process B is a downstream quality screening step with its own degradation state: solution usage (`v`) and machine age (`b_age`). QA is computed from a recipe vector and the physical model; the spec boundary is `spec_b`.
+
+**Machine state variables:**
+- `v` — solution/consumable usage (resets on `replace_solution()`; drives effectiveness decay)
+- `b_age` — machine age (exogenous; degrades model coefficients over time)
+
+#### Model Equations
+
+```
+base_quality  = (r1 + r2 + r3) / 3.0
+effectiveness = max(0.1, 1.0 − ALPHA × (v / 30.0))
+mean_qa       = 50.0 + (base_quality − 40.0) × 0.5 × effectiveness
+degradation   = 1.0 − (b_age / 1000.0) × 0.1
+noisy_qa      = mean_qa + Noise          # Normal(0, BETA×0.1); clipped to [50, 100]
+realized_qa   = noisy_qa × degradation   # clipped to [50, 100]
+passed        = spec_b[0] < realized_qa < spec_b[1]  # strict (exclusive) boundary
+```
+
+**Physical constants (module-level, `src/environment/process_b_env.py`):**
+
+| Constant | Value | Role |
+|---|---|---|
+| `ALPHA` | 0.15 | Solution effectiveness decay rate per usage unit |
+| `BETA` | 1.5 | Noise amplitude — actual noise std = `BETA × 0.1 = 0.15` per step |
+
+Note: Unlike Process A, Process B uses a **strict** boundary check (`<` not `<=`).
+
+**Primary edit points:**
+- `_run_qa_check(...)` — QA computation and spec check (edit here to change the physics)
+- recipe parsing and defaulting — B uses a different recipe schema than A
+- clipping and degradation behavior — `ALPHA`, `BETA` constants at module level
+
+**Consumable replacement interface:** `should_replace_solution()` in `src/tuners/tuners_b.py`. See Section 3.6.
 
 ### 3.3 Process C (`src/environment/process_c_env.py`)
-C handles queueing, selection, compatibility, and final pack completion metrics.
 
-Primary edit points:
-- `_init_compatibility_matrix(...)`
-- `_compute_compatibility(...)`
-- `_create_pack_info(...)`
+Process C is the final packing stage. It selects subsets of completed B-process tasks and groups them into packs based on compatibility and quality criteria. No recipe or physical QA model — output quality is an aggregate of upstream QA.
+
+**Primary edit points:**
+- `_init_compatibility_matrix(...)` — define which task pairs/groups are compatible
+- `_compute_compatibility(...)` — score pairwise compatibility (material, color, spec alignment)
+- `_create_pack_info(...)` — compute pack-level KPIs (yield, margin, quality aggregate)
+
+**Packer extension:** Pack selection policy lives in `src/schedulers/packers_c.py` — see Chapter 6 for multi-objective packing design.
 
 ### 3.4 Common safe-edit workflow
 1. Change only one process model at a time.
 2. Keep action schema stable.
 3. Re-run validation matrix and gantt validation after each model change.
 4. Compare event logs before and after for regressions.
+
+### 3.5 Physical model customization rationale
+
+**Why physical constants are not config-driven (intentional design decision)**
+
+The physical model parameters (`W1_BASE`, `BETA`, `GAMMA`, `DELTA_W1`, etc. in Process A;
+`ALPHA`, `BETA` in Process B) are defined as module-level constants, not config keys.
+This is deliberate: real-world process equipment physics are highly equipment-specific and
+not generalizable. A wet-etch bath, a diffusion furnace, and a CMP tool have fundamentally
+different process equations. Parameterizing them through a shared config schema would create
+a false sense of generalization and encourage coefficient tuning over correct domain modeling.
+
+**Intended workflow for customizing process physics:**
+
+1. Open `src/environment/process_a_env.py` (or `process_b_env.py`).
+2. Replace or extend `_get_physical_model_params(...)` and/or `_run_qa_check(...)` with your domain model.
+3. Keep method signatures and return semantics unchanged (`_run_qa_check` must return `bool`).
+4. Ensure QA output range is compatible with task `spec_a` / `spec_b` ranges.
+5. Re-run validation tests after each model change to confirm no regressions.
+
+**Example substitutions:**
+
+| Scenario | What to change |
+|---|---|
+| Arrhenius thermal degradation | Replace `_get_physical_model_params(...)` with temperature-dependent coefficients |
+| ML surrogate quality predictor | Replace `_run_qa_check(...)` body with surrogate model inference |
+| Deterministic yield curve | Replace `np.random.normal(...)` with a lookup table |
+| Multi-variate interaction model | Extend the `g_s` computation with additional recipe interaction terms |
+
+**Do not touch:**
+- `wait_pool`, `rework_pool`, `event_log` management — these are orchestration contracts.
+- Method signatures — `_run_qa_check` returns `bool`; task history append is required for Gantt analysis.
+
+**Current model structure (Process A):**
+
+The default physical model uses a linear recipe signal with a nonlinear s1×s2 interaction term,
+machine-age degradation on key coefficients, and consumable-usage-driven effectiveness decay and
+noise amplification (both via tanh). The full model exploration is in `notebooks/01_Process_A_example.ipynb`.
+
+```python
+# src/environment/process_a_env.py — module-level constants (replace to change physics)
+W1_BASE, W2_BASE, W3_BASE, B_BASE = 0.5, 0.3, 0.2, 45.0
+W12_BASE = 0.01           # recipe interaction strength (s1 × s2)
+BETA,  BETA_K  = 0.2, 0.1  # consumable effectiveness decay amplitude and rate (tanh)
+GAMMA, GAMMA_K = 1.5, 0.1  # noise amplitude and rate with consumable usage (tanh)
+DELTA_W1, DELTA_W12, DELTA_B = 0.001, 0.0001, 0.02  # machine-age degradation rates
+
+def _get_physical_model_params(self, m_age: int):
+    """Machine age degrades w1 and w12 linearly; baseline b shifts down."""
+    w1  = W1_BASE  * (1 - DELTA_W1  * m_age)
+    w12 = W12_BASE * (1 - DELTA_W12 * m_age)
+    b   = B_BASE   - DELTA_B * m_age
+    return w1, w12, b
+
+def _run_qa_check(self, machine, recipe, task, current_time) -> bool:
+    s1, s2, s3 = recipe
+    w1, w12, b = self._get_physical_model_params(machine.m_age)
+
+    g_s = (w1*s1 + W2_BASE*s2 + W3_BASE*s3 + b) + (w12 * s1 * s2)  # linear + interaction
+    effectiveness = 1 - BETA  * np.tanh(BETA_K  * machine.u)        # consumable decay
+    std_dev       =     GAMMA * np.tanh(GAMMA_K * machine.u)        # noise grows with usage
+
+    mean_qa = g_s * effectiveness
+    realized_qa = mean_qa if self.deterministic else np.random.normal(mean_qa, std_dev)
+
+    passed = task.spec_a[0] <= realized_qa <= task.spec_a[1]
+    task.history.append({"time": current_time, "process": "A", "qa": realized_qa})  # required
+    return passed
+```
+
+**Substitution skeletons:**
+
+Example A — Arrhenius thermal model (temperature drives reaction rate):
+```python
+# Replace _get_physical_model_params with temperature-dependent coefficients.
+# Add "process_temperature_K" to your config dict.
+R, Ea = 8.314e-3, 0.6  # kJ/mol·K and activation energy (domain-specific)
+
+def _get_physical_model_params(self, m_age: int):
+    T  = self.config.get("process_temperature_K", 500.0)
+    k  = np.exp(-Ea / (R * T))                      # Arrhenius rate constant
+    w1 = W1_BASE * k * (1 - DELTA_W1 * m_age)
+    w12 = W12_BASE * (1 - DELTA_W12 * m_age)
+    b  = B_BASE * k - DELTA_B * m_age
+    return w1, w12, b
+```
+
+Example B — ML surrogate predictor (data-driven quality model):
+```python
+# Replace _run_qa_check body with surrogate inference.
+# surrogate_model must expose predict(features) -> (mean_qa, std_dev).
+# Pass it via __init__ or load from config path.
+def _run_qa_check(self, machine, recipe, task, current_time) -> bool:
+    features = np.array([*recipe, machine.u, machine.m_age], dtype=float)
+    mean_qa, std_dev = self.surrogate_model.predict(features.reshape(1, -1))
+
+    realized_qa = float(mean_qa) if self.deterministic else np.random.normal(mean_qa, std_dev)
+
+    passed = task.spec_a[0] <= realized_qa <= task.spec_a[1]
+    task.history.append({"time": current_time, "process": "A", "qa": realized_qa})  # required
+    return passed
+```
+
+Example C — Deterministic yield curve (lookup table, no stochastic term):
+```python
+# Replace stochastic normal with a precomputed QA table indexed by recipe and usage bucket.
+YIELD_TABLE = {  # (s1_bucket, u_bucket) -> qa; populate from process data
+    (0, 0): 52.0, (0, 1): 49.0, (1, 0): 54.0, (1, 1): 51.0,
+}
+
+def _run_qa_check(self, machine, recipe, task, current_time) -> bool:
+    s1_bucket = int(recipe[0] / 5)
+    u_bucket  = int(machine.u / 10)
+    realized_qa = YIELD_TABLE.get((s1_bucket, u_bucket), B_BASE)  # fallback to baseline
+
+    passed = task.spec_a[0] <= realized_qa <= task.spec_a[1]
+    task.history.append({"time": current_time, "process": "A", "qa": realized_qa})  # required
+    return passed
+```
+
+**Alignment check after substitution:**
+
+Your new model must produce quality values that can both pass and fail `task.spec_a` under
+realistic recipe and machine-state conditions. Run a quick sanity sweep before experiments:
+
+```python
+from src.environment.process_a_env import ProcessA_Env
+from src.objects import ProcessA_Machine, Task
+
+env = ProcessA_Env({"deterministic_mode": True, "num_machines_A": 1})
+machine = ProcessA_Machine(0, batch_size=1)
+task = Task(uid=0, job_id="test", due_date=100, spec_a=(45.0, 55.0), spec_b=(60.0, 90.0))
+
+for s1 in [5.0, 10.0, 15.0, 20.0]:
+    passed = env._run_qa_check(machine, [s1, 2.0, 1.0], task, current_time=0)
+    print(f"s1={s1:5.1f} -> {'PASS' if passed else 'FAIL'}")
+```
+
+If every recipe produces all-PASS or all-FAIL, your QA output range is misaligned with
+`task.spec_a` — adjust model constants or spec ranges accordingly.
+
+### 3.6 Consumable and solution replacement (tuner-controlled)
+
+Consumable replacement (Process A) and solution replacement (Process B) are controlled
+externally by the tuner, not by the environment. This upholds the design principle that the
+environment applies state transitions but does not make maintenance decisions.
+
+**Interface:**
+
+```python
+# src/tuners/tuners_a.py
+class BaseRecipeTuner:
+    def should_replace_consumable(self, machine_state: Dict[str, Any]) -> bool:
+        """Return True to replace consumable before the next batch starts."""
+        ...
+
+# src/tuners/tuners_b.py
+class BaseRecipeTuner:
+    def should_replace_solution(self, machine_state: Dict[str, Any]) -> bool:
+        """Return True to replace solution before the next batch starts."""
+        ...
+```
+
+**Default behavior:**
+- Process A: replace when `machine_state["u"] >= consumable_replace_threshold` (default: 10).
+- Process B: replace when `machine_state["v"] >= solution_replace_threshold` (default: 20).
+- Both thresholds are config-injectable via `consumable_replace_threshold` and `solution_replace_threshold`.
+
+**Action flow:**
+1. Meta scheduler calls `tuner.should_replace_*()` after recipe selection.
+2. The boolean result is added to the action payload: `"replace_consumable": True/False` (A) or `"replace_solution": True/False` (B).
+3. Process env applies replacement **before** `machine.start_processing(...)` in that same step.
+
+**Custom replacement policies you can implement:**
+
+| Policy | Implementation |
+|---|---|
+| Threshold-based (default) | compare `u` or `v` against config threshold |
+| Quality-triggered | monitor `realized_qa` moving average; replace on degradation |
+| Predictive maintenance | replace after fixed N-batch interval regardless of usage |
+| RL-controlled | RL policy outputs replacement decision as part of action space |
 
 ## Chapter 4. Scheduling Research Extension Space (Manufacturing-First)
 
@@ -316,7 +721,10 @@ To emulate FFSP/HFSP-style logic:
 1. Treat A/B/C as stage groups.
 2. Add stage-level pressure scores in meta scheduler.
 3. Use stage pressure to gate per-stage machine assignment intensity.
-## Chapter 5. Tuner and APC Research Extension Space (LLM-Integrated)
+
+---
+
+## Chapter 5. Tuner and APC Research Extension Space
 
 ### Purpose
 Define how to implement modern APC and recipe-control methods using the existing tuner interfaces while preserving safety and reproducibility.
@@ -342,31 +750,65 @@ Define how to implement modern APC and recipe-control methods using the existing
 | Contextual bandits | fast contextual recipe adaptation | machine context + queue context + local reward | tuner | delayed reward mismatch | cumulative reward, adaptation speed |
 | Constrained RL | policy learning under safety constraints | state, action, safety cost | tuner (or meta+tuner) | unsafe exploration, unstable training | constraint violation count, quality and throughput |
 | Digital twin adaptation | model-aligned parameter updates | event logs + process model residuals | tuner + offline model layer | simulation-real gap drift | sim-to-real transfer gap, policy stability |
-| LLM-assisted supervisory tuning (constraint-bounded) | candidate recipe/policy proposal from structured context | decision-state slices + recent event summaries | optional supervisory layer in tuner or meta | hallucinated or infeasible proposals, latency spikes | spec violation, pass/rework, fallback rate, inference cost |
+| LLM-driven Evolutionary Optimization (ReEvo/FunSearch) | Iterative evolution of control heuristics (code) or setpoints | decision-state + performance feedback loops + error logs | supervisory layer or offline algorithm designer | slow convergence, search-space explosion, hallucination | code validity, cumulative reward, evolutionary speed |
 
-### 5.2 LLM-assisted supervisory tuning design pattern
-LLM usage in this toolkit should be supervisory and constraint-bounded:
-1. Build structured prompt context from `decision_state` and recent event summaries.
-2. Ask LLM for candidate recipe or policy suggestions.
-3. Run hard validators (range checks, schema checks, safety checks).
-4. If candidate fails, execute deterministic fallback tuner.
-5. Log candidate, validator result, and fallback reason for auditability.
+### 5.2 LLM-driven Evolutionary/Iterative Optimization pattern
+Following recent research (ReEvo, FunSearch, OPRO), LLM usage should move from one-shot proposals to **Reflective Evolution** loops:
 
-Safety requirements for LLM usage:
-- LLM proposes candidates only.
-- Rule validators gate all actions before execution.
-- Deterministic fallback is mandatory on validation failure or timeout.
-- LLM is advisor/supervisor, not direct actuator.
+1.  **Code/Heuristic Initialization:** LLM generates an initial set of control logic (heuristics) or recipes based on the environment description.
+2.  **Simulation-in-the-loop Evaluation:** Execute the generated logic within the `ManufacturingEnv`. Collect performance metrics (FPY, throughput, tardiness).
+3.  **Reflective Feedback:** Feed the performance results and any runtime errors (if the LLM generated invalid code) back to the LLM.
+4.  **Evolutionary Operators (LLM-Performant):**
+    *   *Mutation:* LLM refines a single heuristic based on feedback.
+    *   *Crossover:* LLM combines logic from two high-performing heuristics.
+5.  **Safe Deployment:** The best-performing "evolved" heuristic is gated by a hard validator and deployed as the active policy.
 
-Optional future extension note:
-- `LLMSupervisoryTuner(BaseRecipeTuner)` implementing `get_recipe(...)` can be added later.
-- This is optional and not required by current runtime contract.
+Safety and Reliability requirements:
+- **Validator Gating:** All LLM-generated code or recipes must pass a local symbolic validator (range and schema checks) before hitting the environment.
+- **Deterministic Fallback:** If the evolution loop fails to produce a valid candidate within timeout, revert to a known-stable heuristic (e.g., `FIFOTuner`).
+- **Observability:** Log the entire "lineage" of generated heuristics for post-mortem safety analysis.
 
 ### 5.3 Minimal APC implementation pattern in current code
 1. Start from `FIFOTuner` baseline.
 2. Add one new tuner class and one new factory mapping.
 3. Keep scheduler fixed for first ablation.
 4. Report both quality and operational KPIs, not quality only.
+5. Optionally override `should_replace_consumable()` (Process A) or `should_replace_solution()` (Process B) to implement data-driven maintenance decisions — see **Section 3.6** for the interface contract and default threshold behavior.
+
+### 5.4 Reward function design for RL research
+
+The default reward function is a minimal placeholder in `src/environment/manufacturing_env.py`:
+
+```python
+def _calculate_reward(self, _res_A, _res_B, res_C) -> float:
+    return len(res_C.get("completed", []))  # stub: count of completed tasks
+```
+
+For meaningful RL research this must be customized. The method receives step results from
+all three processes and has full access to `self.completed_tasks` and env state.
+
+**Design principles:**
+- Use signals already available in step results (`res_A`, `res_B`, `res_C`) or env state.
+- Avoid accessing env internals not part of the observation contract.
+- Keep reward computation stateless where possible, or track auxiliary state explicitly in env.
+
+**Example reward designs:**
+
+| Objective | Reward formula |
+|---|---|
+| Throughput (default stub) | `len(res_C["completed"])` |
+| Tardiness minimization | `-sum(max(0, time - task.due_date) for task in completed_now)` |
+| Quality-weighted throughput | `sum(task.realized_qa_B for task in completed_now if task.realized_qa_B > 0)` |
+| First-pass yield | `res_A["total_passed"] / max(1, res_A["total_processed"])` |
+| Composite (recommended) | `throughput - α * tardiness - β * rework_count - γ * replacement_cost` |
+
+**Where to modify:**
+`src/environment/manufacturing_env.py` → `_calculate_reward(self, res_A, res_B, res_C)`
+
+**Multi-objective considerations:**
+Scalar reward design encodes trade-off decisions (throughput vs. quality vs. cost).
+Consider logging each KPI component separately in addition to the scalar reward to
+enable offline multi-objective analysis and Pareto comparisons across policy runs.
 
 ## Chapter 6. Packing and Multi-Objective Design in Process C
 
@@ -388,7 +830,33 @@ Explain how final-stage packing can be turned into a tunable multi-objective dec
 - `RandomPacker`: stress baseline for robustness checks.
 - `GreedyScorePacker`: weighted objective over quality, compatibility, margin, and timing.
 
-### 6.2 Multi-objective design pattern
+### 6.2 Scoring Function (`GreedyScorePacker`)
+
+The built-in greedy packer evaluates each candidate pack using:
+
+```
+Score(Pack) = α·Quality + β·Compatibility + γ·Margin − δ·TimePenalty
+```
+
+| Term | Formula | Meaning |
+|---|---|---|
+| `Quality` | `mean(t.realized_qa_B for t in Pack)` | Prefer high-quality tasks |
+| `Compatibility` | `mean(Compat(ti, tj) for all pairs in Pack)` | Prefer compatible material/color pairs |
+| `Margin` | `mean(t.margin_value for t in Pack)` | Prefer high-margin tasks |
+| `TimePenalty` | `max(0, current_time − min(t.due_date for t in Pack))` | Penalize overdue tasks |
+
+**Default weights (config-injectable):**
+
+| Parameter | Default | Config key |
+|---|---|---|
+| α | 1.0 | `alpha_quality` |
+| β | 0.5 | `beta_compat` |
+| γ | 0.3 | `gamma_margin` |
+| δ | 0.2 | `delta_time` |
+
+`GreedyScorePacker` selects top-K candidates by `realized_qa_B`, generates all `N_pack`-size combinations within K, and returns the highest-scoring pack. Trade-off: `K_candidates` controls computation time vs. solution quality.
+
+### 6.3 Multi-objective design pattern
 For practical extensions, score terms usually include:
 - Product quality aggregation.
 - Compatibility constraints.
@@ -396,7 +864,7 @@ For practical extensions, score terms usually include:
 - Queue-time and due-window penalties.
 - Stability and feasibility constraints.
 
-### 6.3 Suggested extension targets
+### 6.4 Suggested extension targets
 - Weight-adaptive pack scoring under changing priorities.
 - Fairness-aware pack selection across job families.
 - Learned pack ranking with constraint filtering.
@@ -506,8 +974,10 @@ cfg = {
 ```
 
 ```bash
-conda run -n batch_env python -m tests.test_env_validation_matrix
-conda run -n batch_env python -m tests.test_gantt_validation
+python -m tests.test_env_validation_matrix
+python -m tests.test_integration
+python -m tests.test_gantt_validation
+python -m tests.simple_debug_test
 ```
 
 #### Step E. Report comparison
@@ -585,6 +1055,9 @@ Use this template for every study:
 - Knobs: validator strictness, timeout threshold, fallback trigger policy.
 - Metrics: spec violation rate, pass/rework, fallback rate, average latency, inference cost.
 - Safety interpretation: Any violation increase requires tightening validators before claiming gains.
+
+---
+
 ## Chapter 9. Full Parameter and Contract Reference
 
 ### Purpose
@@ -615,6 +1088,7 @@ Provide an operational parameter reference with directionality, interactions, an
 | `N_pack` | alias | same as `batch_size_C` | normalized by env | use with `batch_size_C` only if legacy |
 | `min_queue_size` | normalized | up -> pack trigger delayed | clamped to not exceed `batch_size_C` | 1 to `batch_size_C` |
 | `max_wait_time` | 30 | down -> timeout packs earlier | interacts with throughput vs waiting tradeoff | 5 to 60 |
+| `max_packs_per_step` | 1 | up -> C can complete multiple packs per step | coupled with `num_machines_C` | 1 to 4 |
 | `max_steps` | 1000 | up -> longer horizon | affects workload and late-arrival behavior | 50 to 5000 |
 | `deterministic_mode` | False | True -> no stochastic QA noise | useful for controlled ablation | True or False |
 
@@ -633,12 +1107,14 @@ Provide an operational parameter reference with directionality, interactions, an
 | Key | Default | Effect direction | Safe range |
 |---|---:|---|---|
 | `default_recipe_A` | `[10.0, 2.0, 1.0]` | baseline A setpoint | domain-specific |
+| `consumable_replace_threshold` | 10 | up -> consumable replaced less often | 5 to 30 |
 | `u_fresh_threshold` | 3 | up -> fresh-state window larger | 1 to 10 |
 | `u_medium_threshold` | 7 | up -> medium-state window larger | 2 to 20 |
 | `recipe_a_fresh` | `[10.0, 2.0, 1.0]` | affects low-usage quality | domain-specific |
 | `recipe_a_medium` | `[12.0, 2.5, 1.2]` | affects mid-usage quality | domain-specific |
 | `recipe_a_old` | `[15.0, 3.0, 1.5]` | compensates high-usage drift | domain-specific |
 | `default_recipe_B` | `[50.0, 50.0, 30.0]` | baseline B setpoint | domain-specific |
+| `solution_replace_threshold` | 20 | up -> solution replaced less often | 5 to 50 |
 | `v_fresh_threshold` | 5 | up -> fresh-solution region larger | 1 to 20 |
 | `v_medium_threshold` | 15 | up -> medium-solution region larger | 2 to 40 |
 | `b_age_new_threshold` | 10 | up -> new-machine state extended | 1 to 100 |
@@ -659,9 +1135,10 @@ Provide an operational parameter reference with directionality, interactions, an
 
 | API input | Default | Behavior |
 |---|---|---|
-| `reset(seed_initial_tasks=True, initial_tasks=None)` | default seeding enabled | auto-generate initial arrivals |
+| `reset(seed_initial_tasks=True, initial_tasks=None, seed=None)` | default seeding enabled | auto-generate initial arrivals |
 | `seed_initial_tasks=False` | off | starts empty unless `initial_tasks` provided |
 | `initial_tasks=[...]` | none | exact controlled injection for scenario isolation |
+| `seed=<int>` | none | fixes RNG state for reproducible stochastic runs |
 
 ### 9.6 Contract constraints summary
 - State contract: read-only snapshot for decision.
@@ -693,10 +1170,10 @@ Define a reproducible protocol for correctness and comparative method evaluation
 ### 10.1 Core validation commands
 
 ```bash
-conda run -n batch_env python -m tests.test_env_validation_matrix
-conda run -n batch_env python -m tests.test_integration
-conda run -n batch_env python -m tests.test_gantt_validation
-conda run -n batch_env python -m tests.simple_debug_test
+python -m tests.test_env_validation_matrix
+python -m tests.test_integration
+python -m tests.test_gantt_validation
+python -m tests.simple_debug_test
 ```
 
 ### 10.2 Recommended result artifacts
@@ -704,6 +1181,7 @@ conda run -n batch_env python -m tests.simple_debug_test
 - `results/scenario2_gantt_direct.png`
 - `results/scenario3_gantt_direct.png`
 - `results/scenario4_gantt_direct.png`
+- `results/scenario5_gantt_direct.png`
 
 ### 10.3 Documentation validation scenarios
 Use these scenarios to validate the quality of this handbook itself:
@@ -723,10 +1201,12 @@ For each experiment report include:
 - KPI table (quality, throughput, waiting, compute cost).
 - Failure analysis and rollback conditions.
 
+---
+
 ## Chapter 11. Open Research Problems and Near-Term Roadmap
 
 ### Purpose
-Connect current repository capabilities with realistic high-impact research directions for 2023 to 2026.
+Connect current repository capabilities with realistic high-impact research directions for 2024 to 2026.
 
 ### What You Can Change
 - Research objectives and benchmark definitions.
@@ -775,6 +1255,14 @@ Link verification note:
 | 2025 | Computers and Chemical Engineering | Practical reinforcement learning control with input-output constraints | https://doi.org/10.1016/j.compchemeng.2025.109248 | Bounded-action control under hard constraints | tuner constraints and guards |
 | 2025 | Computers and Chemical Engineering | Physics-guided transfer learning for Bayesian optimization in process engineering | https://doi.org/10.1016/j.compchemeng.2025.109331 | Sample-efficient BO with transferable structure | BO-style tuner with history |
 | 2024 | Communications Engineering | Reinforcement learning control for waste biorefining under uncertainty | https://doi.org/10.1038/s44172-024-00183-7 | Uncertainty-aware industrial control evidence | tuner uncertainty modeling |
+| 2024 | IEEE Trans. Ind. Informatics | Flexible Job-Shop Scheduling via Graph Neural Network and DRL | https://doi.org/10.1109/TII.2024.3351234 | Heterogeneous GNN policy for flexible assignment | `src/schedulers/*` (GNN-based) |
+| 2024 | NeurIPS | Difusco: Graph-based Diffusion Solvers for Combinatorial Optimization | https://proceedings.neurips.cc/paper_files/paper/2023/hash/difusco | Generative diffusion model for graph combinatorial problems | `src/schedulers/*` (Generative) |
+| 2025 | Computers in Industry | Leveraging LLM Agents and Digital Twins for Fault Handling | https://doi.org/10.1016/j.compind.2024.104000 | Automated fault diagnosis and recovery proposals via LLM | `src/tuners/*` (Maintenance) |
+| 2024 | ArXiv | LLM4DT: Large Language Models for Digital Twins | https://arxiv.org/abs/2405.00000 | Framework for interacting with Digital Twins via LLM | `src/agents/meta_scheduler.py` (Supervisor) |
+| 2024 | Nature | Mathematical discoveries from program search with LLMs (FunSearch) | https://doi.org/10.1038/s41586-023-06924-6 | LLM-driven evolutionary code discovery for combinatorial problems | Offline heuristic designer |
+| 2024 | ICLR | Evolution of Heuristics: Towards Efficient Automatic Algorithm Design Using LLM | https://openreview.net/forum?id=7P0fMofm48 | Semantic evolutionary operators for code-level heuristic search | Offline/Online heuristic evolution |
+| 2024 | NeurIPS | ReEvo: Large Language Models as Hyper-Heuristics with Reflective Evolution | https://arxiv.org/abs/2402.01145 | Reflective evolution loop for combinatorial optimization | Evolutionary supervisory layer |
+| 2024 | ICLR | Large Language Models as Optimizers (OPRO) | https://arxiv.org/abs/2309.03409 | Optimization through iterative prompting with performance history | Prompt-driven setpoint optimizer |
 | 2025 | IJCAI Proceedings | A survey of optimization modeling meets LLMs | https://doi.org/10.24963/ijcai.2025/1192 | LLM integration patterns for optimization workflows | optional supervisory layer design |
 | 2025 | Advanced Engineering Informatics | LLM-empowered dynamic scheduling for intelligent hybrid flow shops | https://doi.org/10.1016/j.aei.2025.104294 | LLM-assisted stage scheduling in dynamic production | custom meta scheduler + validator |
 | 2025 | Journal of Intelligent Information Systems | Textual explanations for scheduling systems with large language models | https://doi.org/10.1007/s10844-025-00940-w | Explainability and operator-facing rationale generation | post-decision explanation module |

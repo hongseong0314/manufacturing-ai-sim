@@ -101,8 +101,15 @@ class DefaultMetaScheduler(BaseMetaScheduler):
         scheduler: Any,
         tuner: Any,
         current_time: int,
+        replace_method: str = "should_replace_consumable",
     ) -> Dict[str, Dict[str, Any]]:
-        """Plan machine assignments for process A or B. 
+        """Plan machine assignments for process A or B.
+
+        `replace_method` is the tuner method name used to decide consumable/solution
+        replacement before the next batch starts. The resolved boolean is included
+        in the action payload so the env can apply replacement without deciding it
+        internally (A: 'should_replace_consumable', B: 'should_replace_solution').
+
         스케쥴러 형태에 따라서 이 함수는 바뀔 수 있음 예를들어 machine x task에 대한 matrix action이 가능하면 scheduler에서 바로 machine x task 매핑을 리턴하는 형태로 바꿀 수 있음."""
         planned: Dict[str, Dict[str, Any]] = {}
         allocated_uids = set()
@@ -161,10 +168,14 @@ class DefaultMetaScheduler(BaseMetaScheduler):
                 queue_info=queue_info,
                 current_time=current_time,
             )
+            replace_fn = getattr(tuner, replace_method, None)
+            replace_flag = replace_fn(machine_state) if callable(replace_fn) else False
+            action_key = replace_method.replace("should_", "")
             planned[machine_id] = {
                 "task_uids": selected_uids,
                 "recipe": recipe,
                 "task_type": task_type or "new",
+                action_key: replace_flag,
             }
             allocated_uids.update(selected_uids)
 
@@ -299,6 +310,7 @@ class DefaultMetaScheduler(BaseMetaScheduler):
             scheduler=self.scheduler_a,
             tuner=self.tuner_a,
             current_time=current_time,
+            replace_method="should_replace_consumable",
         )
         actions["B"] = self._plan_ab_process(
             process_state=b_state,
@@ -306,6 +318,7 @@ class DefaultMetaScheduler(BaseMetaScheduler):
             scheduler=self.scheduler_b,
             tuner=self.tuner_b,
             current_time=current_time,
+            replace_method="should_replace_solution",
         )
         actions["C"] = self._plan_c_process(
             c_state=state.get("C", {}),

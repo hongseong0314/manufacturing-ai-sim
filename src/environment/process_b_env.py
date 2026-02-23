@@ -220,12 +220,6 @@ class ProcessB_Env:
 
             self.stats["total_processed"] += len(finished_batch)
 
-            if machine.v >= 20:
-                machine.replace_solution()
-                solution_replacements_this_step += 1
-                self.stats["solution_replacements"] += 1
-                print(f"  t={current_time}: Machine {machine.id} solution replaced")
-
         # 2) Apply externally provided assignments only.
         tasks_to_remove: List[Tuple[str, Task]] = []
         if actions:
@@ -274,6 +268,12 @@ class ProcessB_Env:
 
                 if not can_assign or len(batch) != len(task_uids):
                     continue
+
+                if assignment.get("replace_solution", False):
+                    machine.replace_solution()
+                    solution_replacements_this_step += 1
+                    self.stats["solution_replacements"] += 1
+                    print(f"  t={current_time}: Machine {machine.id} solution replaced")
 
                 finish_time = current_time + self.process_time
                 machine.start_processing(batch, finish_time, recipe)

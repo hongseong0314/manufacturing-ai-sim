@@ -29,7 +29,7 @@
 python -m py_compile src/environment/manufacturing_env.py
 python -m py_compile scripts/generate_gantt_chart_v3.py
 python -m py_compile tests/test_gantt_validation.py
-conda run -n batch_env python tests/test_gantt_validation.py
+python -m tests.test_gantt_validation
 ```
 
 ## 6. 기대 결과

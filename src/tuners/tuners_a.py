@@ -20,6 +20,16 @@ class BaseRecipeTuner:
         """Return recipe vector for the selected batch and machine state."""
         raise NotImplementedError
 
+    def should_replace_consumable(self, machine_state: Dict[str, Any]) -> bool:
+        """Return True if consumable should be replaced before the next batch.
+
+        Override this method to implement custom replacement policies
+        (e.g., quality-triggered, predictive maintenance, schedule-based).
+        Base implementation never replaces; concrete tuners provide logic.
+        """
+        _ = machine_state
+        return False
+
 
 class FIFOTuner(BaseRecipeTuner):
     def __init__(self, config: Dict[str, Any]):
@@ -34,6 +44,11 @@ class FIFOTuner(BaseRecipeTuner):
         current_time: int,
     ) -> List[float]:
         return list(self.default_recipe)
+
+    def should_replace_consumable(self, machine_state: Dict[str, Any]) -> bool:
+        u = float(machine_state.get("u", 0))
+        threshold = self.config.get("consumable_replace_threshold", 10)
+        return u >= threshold
 
 
 class AdaptiveTuner(BaseRecipeTuner):
@@ -65,6 +80,11 @@ class AdaptiveTuner(BaseRecipeTuner):
         state_key = self._state_from_u(machine_u)
         return list(self.recipe_library.get(state_key, self.recipe_library["fresh"]))
 
+    def should_replace_consumable(self, machine_state: Dict[str, Any]) -> bool:
+        u = float(machine_state.get("u", 0))
+        threshold = self.config.get("consumable_replace_threshold", 10)
+        return u >= threshold
+
 
 class RLBasedTuner(BaseRecipeTuner):
     """RL placeholder tuner for process A."""
@@ -81,3 +101,6 @@ class RLBasedTuner(BaseRecipeTuner):
         current_time: int,
     ) -> List[float]:
         return self.fallback.get_recipe(task_rows, machine_state, queue_info, current_time)
+
+    def should_replace_consumable(self, machine_state: Dict[str, Any]) -> bool:
+        return self.fallback.should_replace_consumable(machine_state)

@@ -173,9 +173,6 @@ class ProcessA_Env:
 
             self.stats["total_processed"] += len(finished_batch)
 
-            if machine.u >= 10:
-                machine.replace_consumable()
-
         # 2) Apply externally provided assignments only.
         if actions:
             tasks_to_remove: List[Tuple[str, Task]] = []
@@ -224,6 +221,9 @@ class ProcessA_Env:
 
                 if not can_assign or len(batch) != len(task_uids):
                     continue
+
+                if assignment.get("replace_consumable", False):
+                    machine.replace_consumable()
 
                 finish_time = current_time + self.process_time
                 machine.start_processing(batch, finish_time, recipe)

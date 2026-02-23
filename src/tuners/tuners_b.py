@@ -20,6 +20,16 @@ class BaseRecipeTuner:
         """Return recipe vector for the selected batch and machine state."""
         raise NotImplementedError
 
+    def should_replace_solution(self, machine_state: Dict[str, Any]) -> bool:
+        """Return True if solution should be replaced before the next batch.
+
+        Override this method to implement custom replacement policies
+        (e.g., quality-triggered, predictive maintenance, schedule-based).
+        Base implementation never replaces; concrete tuners provide logic.
+        """
+        _ = machine_state
+        return False
+
 
 class FIFOTuner(BaseRecipeTuner):
     def __init__(self, config: Dict[str, Any]):
@@ -34,6 +44,11 @@ class FIFOTuner(BaseRecipeTuner):
         current_time: int,
     ) -> List[float]:
         return list(self.default_recipe)
+
+    def should_replace_solution(self, machine_state: Dict[str, Any]) -> bool:
+        v = float(machine_state.get("v", 0))
+        threshold = self.config.get("solution_replace_threshold", 20)
+        return v >= threshold
 
 
 class RuleBasedTuner(BaseRecipeTuner):
@@ -97,6 +112,11 @@ class RuleBasedTuner(BaseRecipeTuner):
         spec_b = (float(spec_b_raw[0]), float(spec_b_raw[1]))
         return self._adjust_by_spec(recipe, spec_b)
 
+    def should_replace_solution(self, machine_state: Dict[str, Any]) -> bool:
+        v = float(machine_state.get("v", 0))
+        threshold = self.config.get("solution_replace_threshold", 20)
+        return v >= threshold
+
 
 class RLBasedTuner(BaseRecipeTuner):
     """RL placeholder tuner for process B."""
@@ -113,3 +133,6 @@ class RLBasedTuner(BaseRecipeTuner):
         current_time: int,
     ) -> List[float]:
         return self.fallback.get_recipe(task_rows, machine_state, queue_info, current_time)
+
+    def should_replace_solution(self, machine_state: Dict[str, Any]) -> bool:
+        return self.fallback.should_replace_solution(machine_state)

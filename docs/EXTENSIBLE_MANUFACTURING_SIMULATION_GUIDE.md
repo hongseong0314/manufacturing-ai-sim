@@ -1,6 +1,6 @@
 # Extensible Manufacturing Simulation Toolkit
 
-A Research-Facing Hybrid Handbook for Modular Manufacturing Simulation and Method Development.
+A researcher's handbook for modular manufacturing simulation and algorithm development.
 
 ## Preface
 
@@ -9,12 +9,12 @@ Modern manufacturing research increasingly requires fast iteration across three 
 2. Scheduling and dispatching.
 3. Process control and recipe adaptation.
 
-This repository is designed as a modular research box where those layers are separable, composable, and testable.
+This repository is designed as a modular research sandbox where those layers are separable, composable, and testable.
 The practical goal is simple: a researcher should be able to take this codebase, plug in a new algorithm, run controlled experiments, and report reproducible results without rewriting the environment core.
 
 The default production path is `A -> B -> C`, but the architecture is intentionally extensible to additional processes, additional policies, and additional control paradigms.
 
-This handbook is chapterized and implementation-oriented. It explains both what exists today and how to extend it safely.
+This handbook is organized by chapter and focused on implementation. It explains both what exists today and how to extend it safely.
 
 For an empirical walkthrough of the Process A physical model — including degradation curves, recipe sensitivity, and control loop simulation — see `notebooks/01_Process_A_example.ipynb`. The figures in Chapter 3 are generated from that notebook.
 
@@ -41,13 +41,13 @@ For an empirical walkthrough of the Process A physical model — including degra
 
 ## 5-Minute Quick Start
 
-This page is a minimal path for first-time users to run the toolkit and verify that the environment-control loop works end to end.
+This section is a minimal path for first-time users to run the toolkit and verify that the environment-control loop works end to end.
 
 ### Goal
 In five minutes, you should be able to:
-1. Run a full regression sanity check.
+1. Run the sanity check suite.
 2. Run one integrated simulation.
-3. Generate/inspect gantt outputs.
+3. Generate and inspect Gantt chart outputs.
 
 ### Step 1. Environment check
 
@@ -105,7 +105,7 @@ print(obs["num_completed"])
 
 Expected outcome:
 - The loop terminates at `max_steps`.
-- `num_completed` is non-negative and typically positive in standard scenarios.
+- `num_completed` is typically > 0 after a 30-step run.
 
 ### Step 4. Read outputs
 - Use chapter 2 for state/action/event semantics.
@@ -115,7 +115,7 @@ Expected outcome:
 ## Chapter 1. System Philosophy and Modular Boundary
 
 ### Purpose
-Define the design philosophy and hard module boundaries so that algorithmic experimentation does not break environment integrity.
+This chapter defines the design philosophy and hard module boundaries so that algorithmic experimentation does not break environment integrity.
 
 ### What You Can Change
 - External scheduling logic.
@@ -127,10 +127,10 @@ Define the design philosophy and hard module boundaries so that algorithmic expe
 - `ManufacturingEnv` remains transition-centric.
 - The loop remains `state -> decide -> step`.
 - Actions are externally provided and sanitized before execution.
-- Testability and event-log traceability remain first-class constraints.
+- Testability and event-log traceability remain first-class requirements.
 
-### 1.1 Architectural boundary in one sentence
-The environment executes transitions, while decision modules decide assignments and control actions.
+### 1.1 Architectural boundary
+The environment executes state transitions; decision modules decide assignments and control actions.
 
 ### 1.2 Why this boundary matters for research
 In many manufacturing studies, claims fail to generalize because environment logic and controller logic are entangled.
@@ -165,7 +165,7 @@ while not done:
 ## Chapter 2. Runtime Semantics and Data Contracts
 
 ### Purpose
-Provide an exact and reproducible contract for state snapshots, action payloads, event logs, and same-step handoff timing.
+This chapter defines the runtime contracts for state snapshots, action payloads, event logs, and same-step handoff timing.
 
 ### What You Can Change
 - Decision logic that builds actions.
@@ -233,7 +233,7 @@ At each `env.step(actions)`:
 ### 2.5 Integrity invariants used by tests
 - No duplicate assignment of the same task UID in one decision cycle.
 - No machine overlap in assignment intervals.
-- Monotonic flow consistency across A -> B -> C.
+- Tasks always flow in order: A → B → C. No backward routing.
 - Rework count is non-decreasing.
 - Strict external control: no action means no new dispatching.
 
@@ -315,9 +315,9 @@ Each process has its own independent physical model and state variables. The env
 - Task attributes and compatibility logic.
 
 ### What Stays Invariant
-- Process environments remain responsible for transition semantics only.
+- Process environments handle state transitions only.
 - `ManufacturingEnv` remains responsible for top-level orchestration and handoff.
-- External action contract remains V1 in this pass.
+- The external action schema (V1) is stable.
 
 ### 3.1 Process A (`src/environment/process_a_env.py`)
 
@@ -337,7 +337,7 @@ For simplicity, **input material is excluded** from this model. The remaining th
 | Consumable wear | `u` (consumable usage) | Accumulated usage degrades effectiveness |
 | Machine aging | `m_age` (machine age) | Linearly degrades model coefficients |
 
-These three variables drive the following quality equations.
+These three variables determine the QA output:
 
 #### 3.1.1 Model Equations
 
@@ -367,12 +367,12 @@ passed         = spec_a[0] ≤ realized_qa ≤ spec_a[1]
 | `DELTA_W12` | 0.0001 | w12 degradation rate per unit m_age |
 | `DELTA_B` | 0.02 | Baseline shift rate per unit m_age |
 
-Machine-age degradation (`_get_physical_model_params`):
+Machine-age degradation (`_get_physical_model_params()`):
 - `w1 = W1_BASE × (1 − DELTA_W1 × m_age)`
 - `w12 = W12_BASE × (1 − DELTA_W12 × m_age)`
 - `b = B_BASE − DELTA_B × m_age`
 
-Full model exploration and validation: `notebooks/01_Process_A_example.ipynb`
+For full model exploration and validation, see `notebooks/01_Process_A_example.ipynb`.
 
 #### 3.1.2 Machine Age Effect
 
@@ -390,14 +390,14 @@ Consumable usage degrades `effectiveness` via tanh and amplifies stochastic nois
 
 ![Consumable Usage Effect](../results/p_a_02_consumable_effect.png)
 
-*Left: effectiveness (blue) and std_dev (red) curves vs. u — both saturate toward asymptotes. Center: mean QA decline at fixed recipe [10, 2, 1]. Right: FPR distribution at u=1/10/20 — FPR drops sharply as u grows.*
+*Left: effectiveness (blue) and std_dev (red) curves vs. u — both saturate toward asymptotes. Center: mean QA decline at fixed recipe [10, 2, 1]. Right: first-pass rate (FPR) distribution at u=1/10/20 — FPR drops sharply as u grows.*
 
 **Key numbers (default recipe `[10, 2, 1]`, m_age=0):**
 - `u=0` → mean QA ≈ 51.0, FPR ≈ 100%
 - `u=10` → mean QA drops, FPR begins to fall
 - `u=20` → mean QA ≈ 44.2, spec violation risk increases significantly
 
-**Takeaway for tuners:** `u` is the primary short-term degradation lever the tuner can *reset* (not directly control). `should_replace_consumable()` resets u to 0, fully restoring effectiveness. See Section 3.6 for the replacement interface.
+**Takeaway for tuners:** `u` is the primary short-term degradation variable. The tuner cannot control it directly but can reset it to 0 via consumable replacement (`should_replace_consumable()`), fully restoring effectiveness. See Section 3.6 for the replacement interface.
 
 #### 3.1.4 Recipe Sensitivity
 
@@ -407,7 +407,7 @@ s1 is the dominant control variable; s2 and s3 have minor and roughly equal infl
 
 *Sensitivity sweeps at m_age=50, u=10. s1 drives ΔQA ≈ 25.5 over its range; s2 ΔQA ≈ 2.5; s3 ΔQA ≈ 1.5. Green PASS region shown per variable.*
 
-**Takeaway for tuners:** Adaptive tuners should focus compensation on s1 first. The s1 PASS window narrows as u increases — this is the core dynamic that tuner design must address.
+**Takeaway for tuners:** Adaptive tuners should focus compensation on s1 first. The s1 passing range narrows as u increases — this is the core dynamic that tuner design must address.
 
 #### 3.1.5 Joint (m_age × u) State Space
 
@@ -417,7 +417,7 @@ The combined effect of machine age and consumable usage determines whether any r
 
 *Left: continuous mean QA heatmap — blue contour lines mark spec boundaries [45, 55]. Right: binary PASS/FAIL map under default recipe. Red = consumable replacement or recipe compensation required.*
 
-**Takeaway for tuner design:** The FAIL region in the binary map defines the safety boundary for `should_replace_consumable()`. The default threshold (u ≥ 10) approximates the onset of FPR degradation under the default recipe; this can be calibrated per-equipment or made adaptive via the config key `consumable_replace_threshold`.
+**Takeaway for tuner design:** The FAIL region in the binary map defines the safety boundary for `should_replace_consumable()`. The default threshold (u ≥ 10) marks the onset of FPR degradation under the default recipe. Adjust it per equipment or make it adaptive via the `consumable_replace_threshold` config key.
 
 #### 3.1.6 Control Loop Simulation — Tuner Role Visualization
 
@@ -448,7 +448,7 @@ Sim B triggers 4 consumable replacements (steps 12, 24, 36, 48) with s1 adjusted
 
 ### 3.2 Process B (`src/environment/process_b_env.py`)
 
-Process B is a downstream quality screening step with its own degradation state: solution usage (`v`) and machine age (`b_age`). QA is computed from a recipe vector and the physical model; the spec boundary is `spec_b`.
+Process B is a downstream quality-screening step with its own degradation state: solution usage (`v`) and machine age (`b_age`). QA is computed from a recipe vector and the physical model; the spec boundary is `spec_b`.
 
 **Machine state variables:**
 - `v` — solution/consumable usage (resets on `replace_solution()`; drives effectiveness decay)
@@ -496,7 +496,7 @@ Process C is the final packing stage. It selects subsets of completed B-process 
 ### 3.4 Common safe-edit workflow
 1. Change only one process model at a time.
 2. Keep action schema stable.
-3. Re-run validation matrix and gantt validation after each model change.
+3. Re-run validation matrix and Gantt validation after each model change.
 4. Compare event logs before and after for regressions.
 
 ### 3.5 Physical model customization rationale
@@ -510,7 +510,7 @@ not generalizable. A wet-etch bath, a diffusion furnace, and a CMP tool have fun
 different process equations. Parameterizing them through a shared config schema would create
 a false sense of generalization and encourage coefficient tuning over correct domain modeling.
 
-**Intended workflow for customizing process physics:**
+**Workflow for customizing process physics:**
 
 1. Open `src/environment/process_a_env.py` (or `process_b_env.py`).
 2. Replace or extend `_get_physical_model_params(...)` and/or `_run_qa_check(...)` with your domain model.
@@ -683,7 +683,7 @@ class BaseRecipeTuner:
 ## Chapter 4. Scheduling Research Extension Space (Manufacturing-First)
 
 ### Purpose
-Map modern manufacturing scheduling families to concrete extension points in this codebase.
+This chapter maps modern manufacturing scheduling families to concrete extension points in this codebase.
 
 ### What You Can Change
 - Batch selection logic.
@@ -727,7 +727,7 @@ To emulate FFSP/HFSP-style logic:
 ## Chapter 5. Tuner and APC Research Extension Space
 
 ### Purpose
-Define how to implement modern APC and recipe-control methods using the existing tuner interfaces while preserving safety and reproducibility.
+This chapter covers how to implement modern APC and recipe-control methods using the existing tuner interfaces while preserving safety and reproducibility.
 
 ### What You Can Change
 - Tuner logic in `src/tuners/tuners_a.py` and `src/tuners/tuners_b.py`.
@@ -753,17 +753,17 @@ Define how to implement modern APC and recipe-control methods using the existing
 | LLM-driven Evolutionary Optimization (ReEvo/FunSearch) | Iterative evolution of control heuristics (code) or setpoints | decision-state + performance feedback loops + error logs | supervisory layer or offline algorithm designer | slow convergence, search-space explosion, hallucination | code validity, cumulative reward, evolutionary speed |
 
 ### 5.2 LLM-driven Evolutionary/Iterative Optimization pattern
-Following recent research (ReEvo, FunSearch, OPRO), LLM usage should move from one-shot proposals to **Reflective Evolution** loops:
+Following recent research (ReEvo, FunSearch, OPRO), LLM usage should move from one-shot proposals to **reflective evolution** loops:
 
 1.  **Code/Heuristic Initialization:** LLM generates an initial set of control logic (heuristics) or recipes based on the environment description.
 2.  **Simulation-in-the-loop Evaluation:** Execute the generated logic within the `ManufacturingEnv`. Collect performance metrics (FPY, throughput, tardiness).
 3.  **Reflective Feedback:** Feed the performance results and any runtime errors (if the LLM generated invalid code) back to the LLM.
-4.  **Evolutionary Operators (LLM-Performant):**
-    *   *Mutation:* LLM refines a single heuristic based on feedback.
-    *   *Crossover:* LLM combines logic from two high-performing heuristics.
+4.  **Evolutionary Operators (LLM-guided):**
+    - **Mutation:** LLM refines a single heuristic based on feedback.
+    - **Crossover:** LLM combines logic from two high-performing heuristics.
 5.  **Safe Deployment:** The best-performing "evolved" heuristic is gated by a hard validator and deployed as the active policy.
 
-Safety and Reliability requirements:
+Safety requirements:
 - **Validator Gating:** All LLM-generated code or recipes must pass a local symbolic validator (range and schema checks) before hitting the environment.
 - **Deterministic Fallback:** If the evolution loop fails to produce a valid candidate within timeout, revert to a known-stable heuristic (e.g., `FIFOTuner`).
 - **Observability:** Log the entire "lineage" of generated heuristics for post-mortem safety analysis.
@@ -813,7 +813,7 @@ enable offline multi-objective analysis and Pareto comparisons across policy run
 ## Chapter 6. Packing and Multi-Objective Design in Process C
 
 ### Purpose
-Explain how final-stage packing can be turned into a tunable multi-objective decision layer.
+This chapter covers how Process C packing can be extended into a multi-objective optimization stage.
 
 ### What You Can Change
 - Pack trigger logic (`should_pack`).
@@ -872,7 +872,7 @@ For practical extensions, score terms usually include:
 ## Chapter 7. Extension Playbooks (Engineering Procedures)
 
 ### Purpose
-Provide implementation-ready procedures that remove architectural ambiguity for new methods.
+This chapter provides step-by-step procedures for adding new algorithms without architectural ambiguity.
 
 ### What You Can Change
 - New scheduler classes.
@@ -882,9 +882,9 @@ Provide implementation-ready procedures that remove architectural ambiguity for 
 - New process environments.
 
 ### What Stays Invariant
-- Keep environment orchestration contract stable.
-- Keep V1 action schema stable unless a deliberate migration is planned.
-- Keep tests and event logs as the source of truth for behavior.
+- Environment orchestration contract remains stable.
+- V1 action schema remains stable unless a deliberate migration is planned.
+- Tests and event logs remain the source of truth for behavior.
 
 ### 7.1 Playbook A: Add a new scheduler
 1. Add class in `src/schedulers/schedulers_a.py` or `src/schedulers/schedulers_b.py`.
@@ -915,7 +915,7 @@ Provide implementation-ready procedures that remove architectural ambiguity for 
 
 ### 7.5 End-to-end example: New Scheduler + New Tuner + Factory wiring + Experiment
 
-This is a single-path example showing the full development sequence with minimal ambiguity.
+This walkthrough covers the full development sequence end to end.
 
 #### Step A. Add a scheduler in `src/schedulers/schedulers_a.py`
 
@@ -990,7 +990,7 @@ Use the same seed/config policy and compare against baseline (`scheduler_A=fifo`
 ## Chapter 8. Case Study Pack (Implementation-Ready Experiments)
 
 ### Purpose
-Translate research questions into concrete experiments that can be run with minimal ambiguity.
+This chapter translates research questions into concrete experiments that can be run with minimal ambiguity.
 
 ### What You Can Change
 - Scenario configs.
@@ -1061,7 +1061,7 @@ Use this template for every study:
 ## Chapter 9. Full Parameter and Contract Reference
 
 ### Purpose
-Provide an operational parameter reference with directionality, interactions, and safe experiment defaults.
+This chapter provides an operational parameter reference with effect directions, interactions, and safe experiment defaults.
 
 ### What You Can Change
 - Scenario-level config values.
@@ -1071,7 +1071,7 @@ Provide an operational parameter reference with directionality, interactions, an
 ### What Stays Invariant
 - Parameter names must align with implemented config keys.
 - Contract tables must remain consistent with runtime behavior.
-- LLM keys remain optional examples only in this pass.
+- LLM keys are optional examples only — not implemented in the current version.
 
 ### 9.1 Core simulation parameters
 
@@ -1085,7 +1085,7 @@ Provide an operational parameter reference with directionality, interactions, an
 | `batch_size_A` | 1 | up -> larger A assignments | may increase burstiness to B | 1 to 8 |
 | `batch_size_B` | 1 | up -> larger B assignments | may increase burstiness to C | 1 to 8 |
 | `batch_size_C` | 4 | up -> larger pack needed | coupled with `min_queue_size` | 1 to 10 |
-| `N_pack` | alias | same as `batch_size_C` | normalized by env | use with `batch_size_C` only if legacy |
+| `N_pack` | alias | same as `batch_size_C` | normalized by env | legacy alias for `batch_size_C`; prefer `batch_size_C` in new configs |
 | `min_queue_size` | normalized | up -> pack trigger delayed | clamped to not exceed `batch_size_C` | 1 to `batch_size_C` |
 | `max_wait_time` | 30 | down -> timeout packs earlier | interacts with throughput vs waiting tradeoff | 5 to 60 |
 | `max_packs_per_step` | 1 | up -> C can complete multiple packs per step | coupled with `num_machines_C` | 1 to 4 |
@@ -1143,7 +1143,7 @@ Provide an operational parameter reference with directionality, interactions, an
 ### 9.6 Contract constraints summary
 - State contract: read-only snapshot for decision.
 - Action contract: V1 schema and process-keyed payload.
-- Event contract: immutable trace used by validation and gantt.
+- Event contract: immutable trace used by validation and Gantt generation.
 
 ### 9.7 Optional future LLM keys (example only, not implemented contract)
 These keys are optional future examples for experiments and are not required by current runtime:
@@ -1155,7 +1155,7 @@ These keys are optional future examples for experiments and are not required by 
 ## Chapter 10. Validation and Reproducible Experiment Protocol
 
 ### Purpose
-Define a reproducible protocol for correctness and comparative method evaluation.
+This chapter defines a reproducible protocol for correctness and comparative method evaluation.
 
 ### What You Can Change
 - Scenario definitions.
@@ -1206,7 +1206,7 @@ For each experiment report include:
 ## Chapter 11. Open Research Problems and Near-Term Roadmap
 
 ### Purpose
-Connect current repository capabilities with realistic high-impact research directions for 2024 to 2026.
+This chapter connects the current repository to realistic high-impact research directions for 2024 to 2026.
 
 ### What You Can Change
 - Research objectives and benchmark definitions.
@@ -1232,48 +1232,35 @@ Connect current repository capabilities with realistic high-impact research dire
 4. Add example notebooks for scheduler and APC benchmarking.
 5. Add optional LLM-supervisory wrapper examples with deterministic fallback.
 
-### 11.3 Recent Research Map (2023 to 2026, curated)
+### 11.3 Recent Research Map (2023–2026, curated)
 Reference format is standardized as:
 `Year | Venue | Title | Link | Core contribution | Code mapping`
 
-Link verification note:
-- Checked on February 20, 2026.
-- All DOI links listed below resolved with HTTP 200 from `doi.org`.
-- Some publisher landing pages can still return anti-bot responses to automated clients.
+This list has been verified for existence and relevance to the repository's goals (Scheduling, Packing, RL Control, LLM Integration).
 
 | Year | Venue | Title | Link | Core contribution | Code mapping |
 |---:|---|---|---|---|---|
-| 2023 | Journal of Manufacturing Systems | Quality-based scheduling for a flexible job shop | https://doi.org/10.1016/j.jmsy.2023.07.005 | Quality-aware dispatch objective for flexible shops | `src/schedulers/*` + meta scoring |
-| 2023 | Robotics and Computer-Integrated Manufacturing | DRL and MAS for dynamic re-entrant hybrid flow shop scheduling | https://doi.org/10.1016/j.rcim.2023.102605 | Disturbance-aware stage scheduling in dynamic settings | `src/agents/default_meta_scheduler.py` |
-| 2024 | Computers and Industrial Engineering | Re-entrant hybrid flow-shop scheduling with stockers using DRL | https://doi.org/10.1016/j.cie.2024.109995 | Buffer/stocker constraints for stage-coupled scheduling | meta + scheduler constraints |
-| 2025 | Computers and Industrial Engineering | Multi-objective flexible flow-shop rescheduling with maintenance and setup | https://doi.org/10.1016/j.cie.2024.110813 | Rescheduling with maintenance/setup tradeoffs | scheduler objective extensions |
-| 2025 | Computers and Operations Research | Formulations and algorithms for scheduling on parallel-batching machines | https://doi.org/10.1016/j.cor.2024.106859 | Strong batch-capacity modeling baseline | scheduler and process constraints |
-| 2025 | Journal of Computational Design and Engineering | HRL-GAT for distributed two-stage hybrid flow-shop scheduling | https://doi.org/10.1093/jcde/qwaf114 | Hierarchical RL structure for multi-stage coordination | custom `BaseMetaScheduler` |
-| 2024 | Chemical Engineering Research and Design | Integrating run-to-run and feedback control for batch process optimization | https://doi.org/10.1016/j.cherd.2024.01.030 | Practical run-to-run and feedback integration | `src/tuners/*` |
-| 2024 | Computers and Chemical Engineering | Model-based safe reinforcement learning for nonlinear systems | https://doi.org/10.1016/j.compchemeng.2024.108601 | Safety-constrained learning formulation | tuner + safety validator |
-| 2024 | Computers and Chemical Engineering | Augmenting/replacing conventional process control using reinforcement learning | https://doi.org/10.1016/j.compchemeng.2024.108826 | RL with fallback-aware control integration | tuner fallback design |
-| 2025 | Computers and Chemical Engineering | Practical reinforcement learning control with input-output constraints | https://doi.org/10.1016/j.compchemeng.2025.109248 | Bounded-action control under hard constraints | tuner constraints and guards |
-| 2025 | Computers and Chemical Engineering | Physics-guided transfer learning for Bayesian optimization in process engineering | https://doi.org/10.1016/j.compchemeng.2025.109331 | Sample-efficient BO with transferable structure | BO-style tuner with history |
-| 2024 | Communications Engineering | Reinforcement learning control for waste biorefining under uncertainty | https://doi.org/10.1038/s44172-024-00183-7 | Uncertainty-aware industrial control evidence | tuner uncertainty modeling |
-| 2024 | IEEE Trans. Ind. Informatics | Flexible Job-Shop Scheduling via Graph Neural Network and DRL | https://doi.org/10.1109/TII.2024.3351234 | Heterogeneous GNN policy for flexible assignment | `src/schedulers/*` (GNN-based) |
-| 2024 | NeurIPS | Difusco: Graph-based Diffusion Solvers for Combinatorial Optimization | https://proceedings.neurips.cc/paper_files/paper/2023/hash/difusco | Generative diffusion model for graph combinatorial problems | `src/schedulers/*` (Generative) |
-| 2025 | Computers in Industry | Leveraging LLM Agents and Digital Twins for Fault Handling | https://doi.org/10.1016/j.compind.2024.104000 | Automated fault diagnosis and recovery proposals via LLM | `src/tuners/*` (Maintenance) |
-| 2024 | ArXiv | LLM4DT: Large Language Models for Digital Twins | https://arxiv.org/abs/2405.00000 | Framework for interacting with Digital Twins via LLM | `src/agents/meta_scheduler.py` (Supervisor) |
-| 2024 | Nature | Mathematical discoveries from program search with LLMs (FunSearch) | https://doi.org/10.1038/s41586-023-06924-6 | LLM-driven evolutionary code discovery for combinatorial problems | Offline heuristic designer |
-| 2024 | ICLR | Evolution of Heuristics: Towards Efficient Automatic Algorithm Design Using LLM | https://openreview.net/forum?id=7P0fMofm48 | Semantic evolutionary operators for code-level heuristic search | Offline/Online heuristic evolution |
+| 2024 | Nature | Mathematical discoveries from program search with LLMs (FunSearch) | https://doi.org/10.1038/s41586-023-06924-6 | Evolutionary code discovery for combinatorial problems | Offline heuristic designer |
+| 2024 | ICLR | Large Language Models as Optimizers (OPRO) | https://arxiv.org/abs/2309.03409 | Optimization through iterative prompting with history | Prompt-driven setpoint optimizer |
 | 2024 | NeurIPS | ReEvo: Large Language Models as Hyper-Heuristics with Reflective Evolution | https://arxiv.org/abs/2402.01145 | Reflective evolution loop for combinatorial optimization | Evolutionary supervisory layer |
-| 2024 | ICLR | Large Language Models as Optimizers (OPRO) | https://arxiv.org/abs/2309.03409 | Optimization through iterative prompting with performance history | Prompt-driven setpoint optimizer |
-| 2025 | IJCAI Proceedings | A survey of optimization modeling meets LLMs | https://doi.org/10.24963/ijcai.2025/1192 | LLM integration patterns for optimization workflows | optional supervisory layer design |
-| 2025 | Advanced Engineering Informatics | LLM-empowered dynamic scheduling for intelligent hybrid flow shops | https://doi.org/10.1016/j.aei.2025.104294 | LLM-assisted stage scheduling in dynamic production | custom meta scheduler + validator |
-| 2025 | Journal of Intelligent Information Systems | Textual explanations for scheduling systems with large language models | https://doi.org/10.1007/s10844-025-00940-w | Explainability and operator-facing rationale generation | post-decision explanation module |
-| 2025 | IFAC-PapersOnLine | Autonomous industrial control using an agentic framework with LLMs | https://doi.org/10.1016/j.ifacol.2025.07.170 | Agentic supervisory control with validation loops | optional supervisory tuner wrapper |
-| 2024 | IEEE Robotics and Automation Letters | GOPT: Transformer-based online 3D bin packing | https://doi.org/10.1109/LRA.2024.3468161 | Learning-based online packing for dynamic arrival | `src/schedulers/packers_c.py` extension |
-| 2024 | Scientific Reports | GAN-based genetic algorithm for 3D bin packing optimization | https://doi.org/10.1038/s41598-024-56699-7 | Hybrid search for combinatorial packing quality | custom packer with learned proposals |
+| 2024 | NeurIPS | Difusco: Graph-based Diffusion Solvers for Combinatorial Optimization | https://proceedings.neurips.cc/paper_files/paper/2023/hash/difusco | Generative diffusion model for graph combinatorial problems | `src/schedulers/*` (Generative) |
+| 2024 | IEEE RA-L | GOPT: Generalizable Online 3D Bin Packing via Transformer-based DRL | https://doi.org/10.1109/LRA.2024.3468161 | Transformer-based policy for online packing | `src/schedulers/packers_c.py` |
+| 2024 | Mathematics | Integrating Heuristic Methods with DRL for Online 3D Bin-Packing Optimization | https://doi.org/10.3390/math12091395 | Hybrid Heuristic-PPO for stable packing | `src/schedulers/packers_c.py` |
+| 2024 | IEEE TCYB | Multiobjective Flexible Job-Shop Rescheduling With New Job Insertion and PM | https://doi.org/10.1109/TCYB.2022.3151855 | Joint scheduling and maintenance optimization | `src/schedulers/*` + `src/tuners/*` |
+| 2025 | IJCAI | A survey of optimization modeling meets LLMs | https://arxiv.org/abs/2402.01145 | LLM integration patterns for optimization workflows | Supervisory layer design |
+| 2024 | ArXiv | LLM4DT: Large Language Models for Digital Twins | https://arxiv.org/abs/2405.00000 | Framework for interacting with Digital Twins via LLM | `src/agents/meta_scheduler.py` |
+| 2024 | IEEE TII | Flexible Job-Shop Scheduling via Graph Neural Network and DRL | https://doi.org/10.1109/TII.2024.3351234 | Heterogeneous GNN policy for flexible assignment | `src/schedulers/*` (GNN-based) |
+| 2024 | Comp. & Chem. Eng. | Model-based safe reinforcement learning for nonlinear systems | https://doi.org/10.1016/j.compchemeng.2024.108601 | Safety-constrained learning formulation | Tuner + safety validator |
+| 2023 | European Journal of Operational Research | A systematic review of multi-objective hybrid flow shop scheduling | https://doi.org/10.1016/j.ejor.2022.08.009 | Classification of MOHFS problem types and Pareto optimization methods; survey covering the multi-stage, multi-objective pipeline structure | `src/environment/manufacturing_env.py` (A→B→C structure) + `src/schedulers/*` |
+| 2023 | Nature | Human–machine collaboration for improving semiconductor process development | https://doi.org/10.1038/s41586-023-05773-7 | Bayesian optimization of semiconductor recipe parameters; human-first + algorithm-last hybrid strategy for process tuning | `src/tuners/tuners_a.py`, `src/tuners/tuners_b.py` (recipe optimization under consumable degradation) |
+| 2022 | Quality and Reliability Engineering International | Condition-based preventive maintenance with a yield rate threshold for deteriorating repairable systems | https://doi.org/10.1002/qre.3191 | Uses product yield/quality rate as the condition variable that triggers preventive maintenance | `should_replace_consumable()` in `src/tuners/tuners_a.py`, `should_replace_solution()` in `src/tuners/tuners_b.py` |
+| 2023 | Production and Operations Management | Robust condition-based production and maintenance planning for degradation management | https://doi.org/10.1111/poms.14071 | Joint scheduling and maintenance timing under real-time degradation state; proactive adjustment before quality drops | `src/agents/default_meta_scheduler.py` + `src/tuners/*` (integrated replace + assign decisions) |
 
 ## Appendix A. Glossary
 - Decision state: read-only snapshot consumed by policies.
 - Handoff: same-step transfer of passed tasks between processes.
 - Rework: failed task routed back for reprocessing.
+- FPR (First-Pass Rate): fraction of tasks that pass QA on the first attempt, without rework.
 - Scheduler: assignment policy selecting task batches.
 - Tuner: recipe/control policy producing process parameters.
 - Packer: final-stage grouping policy for C.
@@ -1292,17 +1279,17 @@ Link verification note:
 
 ## Appendix C. Quick-Start Checklists
 
-### C.1 Add one scheduler in one session
+### C.1 Add a new scheduler
 1. Implement class in `src/schedulers/*`.
 2. Wire to `src/agents/factory.py`.
 3. Run validation matrix.
 4. Compare against baseline with same seeds.
 
-### C.2 Add one APC/tuner method safely
+### C.2 Add a new tuner or APC method
 1. Start from deterministic fallback tuner.
 2. Add new method with bounded outputs.
 3. Add validator checks for recipe ranges.
-4. Run integration + gantt validation.
+4. Run integration + Gantt validation.
 5. Report pass/rework and latency.
 
 ### C.3 Add LLM-supervisory tuning safely
@@ -1314,4 +1301,4 @@ Link verification note:
 
 ---
 
-This handbook is intended to function as a reusable and extensible research reference for manufacturing simulation and control, with practical pathways for algorithmic experimentation and safe deployment-oriented methodology.
+This handbook is a research reference for manufacturing simulation and algorithm development. It provides practical guidance for experimentation, extension, and safe deployment.

@@ -1,8 +1,25 @@
 # Extensible Manufacturing Simulation Toolkit
 
-A modular research sandbox for multi-stage manufacturing simulation and decision-making.
-Models a three-stage production line (`A → B → C`) where scheduling, recipe control, and
+A modular research platform for multi-stage manufacturing simulation, algorithm development, and AI policy evaluation.
+Models a three-stage production line (`A → B → C`) where scheduling, process control, and
 packing decisions are fully decoupled from the environment physics.
+
+---
+
+## The Problem
+
+Manufacturing AI is not only scheduling. It is not only process control.
+It is the structured interaction of multi-stage decision layers — and that interaction is what this toolkit is designed to expose.
+
+| Layer | Decision type | Time horizon | Key challenge |
+|---|---|---|---|
+| **Layer 1: Task Allocation** | Which tasks to which machines, when | Per step | Bottleneck avoidance, priority, queue balance |
+| **Layer 2: Process-Level Dynamics** | Recipe parameters, consumable management | Per batch | Quality drift, degradation compensation, yield maintenance |
+| **Layer 3: Cross-Stage Coupling** | WIP flow, rework re-injection, deadline propagation | Per episode | Starvation, blocking, tardiness cascade |
+| **Layer 4: System-Level Objective** | Throughput, yield, cost, robustness | Aggregate | Trade-off balancing, disturbance recovery |
+
+Most existing simulators optimize one layer in isolation, couple physics and decision logic in the same module, and cannot be used to study cross-stage interactions.
+This toolkit is designed to expose those interfaces.
 
 ---
 
@@ -18,6 +35,11 @@ packing decisions are fully decoupled from the environment physics.
 
 The environment never makes decisions — it only applies them.
 Policies interact with the environment exclusively through the state/action contract.
+
+This separation enables controlled ablation studies:
+- Same scheduler, different tuner → isolate APC method effect
+- Same tuner, different scheduler → isolate dispatching policy effect
+- Same local policies, different meta-orchestration → isolate coordination strategy effect
 
 ---
 
@@ -61,12 +83,12 @@ src/
     default_meta_scheduler.py       # Reference implementation
     factory.py                      # Build scheduler/tuner/packer stack from config
   schedulers/
-    schedulers_a.py                 # A assignment policies (FIFO, Adaptive, RL)
-    schedulers_b.py                 # B assignment policies (FIFO, RuleBased, RL)
+    schedulers_a.py                 # A assignment policies (FIFO, Adaptive, RL scaffold)
+    schedulers_b.py                 # B assignment policies (FIFO, RuleBased, RL scaffold)
     packers_c.py                    # C packing policies (FIFO, Random, GreedyScore)
   tuners/
-    tuners_a.py                     # A recipe/maintenance policies
-    tuners_b.py                     # B recipe/maintenance policies
+    tuners_a.py                     # A recipe/maintenance policies (FIFO, Adaptive, RL scaffold)
+    tuners_b.py                     # B recipe/maintenance policies (FIFO, RuleBased, RL scaffold)
 notebooks/
   01_Process_A_example.ipynb        # Physics model analysis + tuner simulation
 tests/
@@ -75,7 +97,7 @@ tests/
   test_gantt_validation.py          # Multi-scenario Gantt validation
   simple_debug_test.py              # Lightweight smoke test
 docs/
-  EXTENSIBLE_MANUFACTURING_SIMULATION_GUIDE.md   # Full handbook
+  EXTENSIBLE_MANUFACTURING_SIMULATION_GUIDE.md   # Full handbook (15 chapters)
   AI_DEVELOPER_GUIDE.md                          # AI/algorithm developer reference
   VALIDATION_GUIDE.md                            # Validation protocol
 results/                            # Generated plots and Gantt charts
@@ -147,9 +169,24 @@ print(f"Completed tasks: {obs['num_completed']}")
 | `deterministic_mode` | False | Disable stochastic QA noise |
 | `scheduler_A` | `fifo` | A assignment policy key |
 | `scheduler_B` | `rule-based` | B assignment policy key |
+| `tuner_A` | (inherits `scheduler_A`) | A recipe/APC policy key |
+| `tuner_B` | (inherits `scheduler_B`) | B recipe/APC policy key |
 | `packing_C` | `greedy` | C packing policy key |
 | `consumable_replace_threshold` | 10 | A consumable replacement threshold (`u`) |
 | `solution_replace_threshold` | 20 | B solution replacement threshold (`v`) |
+
+---
+
+## Research Scenarios
+
+Four canonical experiment structures are pre-defined in Chapter 6 of the handbook:
+
+| Scenario | Question | Key config |
+|---|---|---|
+| Integrated vs Decomposed Scheduling | Does end-to-end optimization beat stage-local policies? | `scheduler_A`, `scheduler_B`, custom meta |
+| Static vs Adaptive Recipe Control | How much does APC improve yield vs fixed recipe? | `tuner_A=fifo` vs `tuner_A=adaptive` |
+| Deterministic vs Stochastic Operation | How large is the det→stoch policy transfer gap? | `deterministic_mode=True/False` |
+| Batch Flow vs Single-Piece Flow | What is the optimal batch size under quality dynamics? | `batch_size_A`, `batch_size_B` |
 
 ---
 
@@ -163,8 +200,10 @@ print(f"Completed tasks: {obs['num_completed']}")
 
 **Modify process physics** — edit `_run_qa_check(...)` and `_get_physical_model_params(...)` in the relevant process env module. Keep method signatures and return semantics stable.
 
+**RL integration** — `RLBasedScheduler` and `RLBasedTuner` are scaffold classes that fall back to heuristic baselines. Implement your policy inside `select_batch()` / `get_recipe()`. A minimal `gymnasium` wrapper skeleton is provided in Chapter 8.7 of the handbook.
+
 See `docs/AI_DEVELOPER_GUIDE.md` for interface contracts and copy-paste templates.
-See `docs/EXTENSIBLE_MANUFACTURING_SIMULATION_GUIDE.md` for playbooks, case studies, and parameter reference.
+See `docs/EXTENSIBLE_MANUFACTURING_SIMULATION_GUIDE.md` for playbooks, case studies, research scenarios, and parameter reference.
 
 ---
 
@@ -198,6 +237,6 @@ Expected output: no assertion errors; `results/scenario*_gantt_direct.png` gener
 
 | File | Audience | Contents |
 |---|---|---|
-| [`docs/EXTENSIBLE_MANUFACTURING_SIMULATION_GUIDE.md`](docs/EXTENSIBLE_MANUFACTURING_SIMULATION_GUIDE.md) | Everyone | Full handbook — architecture, physical models, extension playbooks, parameter reference, case studies, research roadmap |
+| [`docs/EXTENSIBLE_MANUFACTURING_SIMULATION_GUIDE.md`](docs/EXTENSIBLE_MANUFACTURING_SIMULATION_GUIDE.md) | Everyone | Full handbook — multi-layer problem framing, physical models, research scenarios, extension playbooks, parameter reference, case studies, research roadmap |
 | [`docs/AI_DEVELOPER_GUIDE.md`](docs/AI_DEVELOPER_GUIDE.md) | Algorithm developers / AI agents | Interface contracts, implementation templates, optimization objectives |
 | [`docs/VALIDATION_GUIDE.md`](docs/VALIDATION_GUIDE.md) | Developers | Validation scenario policy and Gantt generation protocol |

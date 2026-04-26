@@ -25,9 +25,20 @@ data/
 *.pkl
 *.pickle
 
+# Graphify
+graphify-out/
+src/graphify-out/
+.graphify-venv/
+
 # Environment variables
 .env
 
+docs
+
 # Other
 .DS_Store
+.continue
+.codex
+.claude
 *.log
+AGENTS.md

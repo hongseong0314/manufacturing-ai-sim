@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, Query
+from fastapi import Body, FastAPI, Query
 
 from src.environment.manufacturing_env import ManufacturingEnv
 from src.mes import MESDevelopmentHarness
@@ -88,3 +88,43 @@ def get_recommendations(correlation_id: Optional[str] = None) -> Dict[str, Any]:
 def get_events(correlation_id: Optional[str] = None) -> Dict[str, Any]:
     data = [e.to_dict() for e in context.harness.store.events(correlation_id)]
     return {"items": data, "count": len(data)}
+
+
+@app.get("/api/v1/dispatch/candidates")
+def get_dispatch_candidates(stage: str = Query("A", pattern="^[ABCabc]$")) -> Dict[str, Any]:
+    decision_state = context.env.get_decision_state()
+    resolved_stage = stage.upper()
+    items = context.harness.service.dispatch_candidates(decision_state, stage=resolved_stage)
+    return {"stage": resolved_stage, "items": items, "count": len(items)}
+
+
+@app.post("/api/v1/rules/validate")
+def validate_rules(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, Any]:
+    decision_state = context.env.get_decision_state()
+    recommendations: List[Any] = list(payload.get("recommendations", []))
+    validation = context.harness.service.validate_recommendations(decision_state, recommendations)
+    return validation.to_dict()
+
+
+@app.post("/api/v1/commands/track-in/preview")
+def preview_track_in(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, Any]:
+    target_stage = str(payload.get("target_stage", "A")).upper()
+    correlation_id = payload.get("correlation_id")
+    result = context.harness.run(
+        context.env.get_decision_state(),
+        target_stage=target_stage,
+        correlation_id=str(correlation_id) if correlation_id else None,
+    )
+    return result.to_dict()
+
+
+@app.post("/api/v1/commands/track-in/execute")
+def execute_track_in(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, Any]:
+    target_stage = str(payload.get("target_stage", "A")).upper()
+    correlation_id = payload.get("correlation_id")
+    result = context.harness.run_and_step(
+        context.env,
+        target_stage=target_stage,
+        correlation_id=str(correlation_id) if correlation_id else None,
+    )
+    return result.to_dict()

@@ -1,9 +1,16 @@
 from fastapi.testclient import TestClient
+import pytest
 
 from src.mes.api import app
 
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def reset_simulation_between_tests():
+    client.post('/api/v2/simulation/reset')
+    yield
 
 
 def test_health():
@@ -41,7 +48,10 @@ def test_harness_run_rejected_stage_has_validation_and_no_command():
     assert payload['evaluation']['status'] == 'REJECTED'
     assert payload['command'] is None
     assert payload['generated']['validation']['validation_status'] == 'REJECTED'
-    assert payload['generated']['validation']['correlation_id'] == payload['generated']['plan']['correlation_id']
+    assert (
+        payload['generated']['validation']['correlation_id']
+        == payload['generated']['plan']['correlation_id']
+    )
 
 
 def test_dispatch_candidates_endpoint():
@@ -97,3 +107,38 @@ def test_track_in_preview_and_execute_endpoints():
         assert e['command'] is not None
     if e['evaluation']['status'] == 'PASSED' and e['command'] is not None:
         assert e['step_result'] is not None
+
+
+def test_v2_generate_tasks_by_time_point():
+    before = client.get('/api/v1/wip').json()
+    r = client.post('/api/v2/tasks/generate', json={'time_point': 120})
+    assert r.status_code == 200
+    body = r.json()
+    assert body['time_point'] == 120
+    assert body['inserted_count'] == 40
+    assert len(body['task_uids']) == 40
+    assert body['queue_a_size'] >= 40
+
+
+def test_v2_run_cycle_and_decision_chain_aggregation():
+    run = client.post('/api/v2/harness/run-cycle', json={'target_stage': 'A'})
+    assert run.status_code == 200
+    payload = run.json()
+    corr = payload['generated']['plan']['correlation_id']
+
+    chain = client.get(f'/api/v2/decision-chain/{corr}')
+    assert chain.status_code == 200
+    c = chain.json()
+    assert c['correlation_id'] == corr
+    assert c['counts']['recommendations'] >= 4
+    assert c['counts']['events'] >= 5
+    assert c['counts']['validations'] >= 1
+
+
+def test_v2_run_until_stops_with_max_cycles_or_conditions():
+    r = client.post('/api/v2/harness/run-until', json={'target_stage': 'A', 'max_cycles': 2})
+    assert r.status_code == 200
+    body = r.json()
+    assert body['count'] <= 2
+    assert body['stop_reason'] in ('max_cycles', 'rejected', 'no_candidates')
+    assert len(body['cycles']) == body['count']

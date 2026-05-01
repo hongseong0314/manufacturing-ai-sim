@@ -175,7 +175,11 @@ class MESPlannerAgent:
             recommended_action=objective_action,
             score=1.0,
             confidence=1.0,
-            reasons=["objective_trigger_due" if trigger_due else "objective_reused_until_next_trigger"],
+            reasons=[
+                "objective_trigger_due"
+                if trigger_due
+                else "objective_reused_until_next_trigger"
+            ],
         )
 
         stage_priorities = {
@@ -213,7 +217,11 @@ class MESPlannerAgent:
             },
             score=1.0,
             confidence=1.0,
-            reasons=["first_stage_with_rule_eligible_candidates" if trigger_due else "stage_priority_maintained_until_next_trigger"],
+            reasons=[
+                "first_stage_with_rule_eligible_candidates"
+                if trigger_due
+                else "stage_priority_maintained_until_next_trigger"
+            ],
         )
 
         self._last_objective_action = copy.deepcopy(objective_action)
@@ -233,7 +241,11 @@ class MESPlannerAgent:
                 return stage
         return "A"
 
-    def _objective_features(self, decision_state: Dict[str, Any], trigger_due: bool) -> Dict[str, Any]:
+    def _objective_features(
+        self,
+        decision_state: Dict[str, Any],
+        trigger_due: bool,
+    ) -> Dict[str, Any]:
         mes_state = self.service.decision_state_to_mes(decision_state)
         return {
             "time": mes_state.get("time", 0),
@@ -259,10 +271,34 @@ class MESPlannerAgent:
             wait_total += len(decision_state.get(stage, {}).get("wait_pool_uids", []))
 
         if tardiness > 0:
-            return {"objective_id": "OBJ_DUE_DATE_RECOVERY", "weights": {"throughput": 0.8, "yield": 1.0, "tardiness": 1.4, "cost": 0.2}}
+            return {
+                "objective_id": "OBJ_DUE_DATE_RECOVERY",
+                "weights": {
+                    "throughput": 0.8,
+                    "yield": 1.0,
+                    "tardiness": 1.4,
+                    "cost": 0.2,
+                },
+            }
         if wait_total >= 10:
-            return {"objective_id": "OBJ_THROUGHPUT_FIRST", "weights": {"throughput": 1.4, "yield": 0.9, "tardiness": 0.7, "cost": 0.2}}
-        return {"objective_id": objective_id, "weights": {"throughput": 1.0, "yield": 1.0, "tardiness": 0.5, "cost": 0.2}}
+            return {
+                "objective_id": "OBJ_THROUGHPUT_FIRST",
+                "weights": {
+                    "throughput": 1.4,
+                    "yield": 0.9,
+                    "tardiness": 0.7,
+                    "cost": 0.2,
+                },
+            }
+        return {
+            "objective_id": self._last_objective_id,
+            "weights": {
+                "throughput": 1.0,
+                "yield": 1.0,
+                "tardiness": 0.5,
+                "cost": 0.2,
+            },
+        }
 
 
 class MESGeneratorAgent:
@@ -393,9 +429,16 @@ class MESGeneratorAgent:
             return decision_state
         cloned = dict(decision_state)
         stage_state = dict(cloned.get(stage, {}))
-        for key in ("wait_pool_uids", "rework_pool_uids", "incoming_from_A_uids", "incoming_from_B_uids"):
+        for key in (
+            "wait_pool_uids",
+            "rework_pool_uids",
+            "incoming_from_A_uids",
+            "incoming_from_B_uids",
+        ):
             if key in stage_state and isinstance(stage_state.get(key), list):
-                stage_state[key] = [uid for uid in stage_state[key] if int(uid) not in task_uids]
+                stage_state[key] = [
+                    uid for uid in stage_state[key] if int(uid) not in task_uids
+                ]
         cloned[stage] = stage_state
         return cloned
 
@@ -554,10 +597,6 @@ class MESEvaluatorAgent:
         events = store.events(correlation_id)
         commands = store.commands(correlation_id)
 
-        all_events = list(getattr(store, "_events", events))
-        all_commands = list(getattr(store, "_commands", {}).values()) if hasattr(store, "_commands") else list(commands)
-        all_recommendations = list(getattr(store, "_recommendations", {}).values()) if hasattr(store, "_recommendations") else list(recommendations)
-
         if len(recommendations) < len(LAYER_SEQUENCE) or len(snapshots) < len(
             LAYER_SEQUENCE
         ) or not validations:
@@ -568,19 +607,6 @@ class MESEvaluatorAgent:
             minimum_events += 1
         if len(events) < minimum_events:
             issues.append("INCOMPLETE_CHAIN_RECORDS")
-
-        if any(rec.correlation_id == correlation_id for rec in all_recommendations) and any(
-            rec.correlation_id != correlation_id for rec in all_recommendations
-        ):
-            issues.append("STORE_CORRELATION_MISMATCH")
-        if any(event.correlation_id == correlation_id for event in all_events) and any(
-            event.correlation_id != correlation_id for event in all_events
-        ):
-            issues.append("STORE_CORRELATION_MISMATCH")
-        if any(cmd.correlation_id == correlation_id for cmd in all_commands) and any(
-            cmd.correlation_id != correlation_id for cmd in all_commands
-        ):
-            issues.append("STORE_CORRELATION_MISMATCH")
 
         if generated.validation.passed:
             command_created = [

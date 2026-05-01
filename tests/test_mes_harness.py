@@ -265,3 +265,45 @@ def test_planner_updates_objective_on_large_wait_pool():
 
     assert plan.objective.objective_id == "OBJ_THROUGHPUT_FIRST"
     assert plan.objective.recommended_action["weights"]["throughput"] > 1.0
+
+
+def test_rule_engine_prefers_layer_matched_dispatch_and_recipe_recommendations():
+    env = _build_env()
+    harness = MESDevelopmentHarness()
+    state = env.get_decision_state()
+
+    l1 = harness.service.build_rule_only_dispatch_recommendation(state, stage="A")
+    assert l1 is not None
+
+    from src.mes.recommendations import create_recommendation
+
+    wrong_dispatch = create_recommendation(
+        recommendation_type="DISPATCH",
+        layer_id="L3",
+        objective_id="OBJ_TEST",
+        policy_id="TEST",
+        model_id="test",
+        model_version="0.0",
+        feature_snapshot_id="FS_WRONG",
+        correlation_id=l1.correlation_id,
+        recommended_action={"stage": "A", "equipment_id": "A_999", "task_uids": [999999]},
+    )
+
+    l2 = create_recommendation(
+        recommendation_type="RECIPE",
+        layer_id="L2",
+        objective_id="OBJ_TEST",
+        policy_id="TEST",
+        model_id="test",
+        model_version="0.0",
+        feature_snapshot_id="FS_L2",
+        correlation_id=l1.correlation_id,
+        recommended_action={"recipe": [1.0, 2.0, 3.0]},
+        parent_recommendation_id=l1.recommendation_id,
+    )
+
+    validation = harness.service.validate_recommendations(state, [wrong_dispatch, l1, l2])
+
+    assert validation.passed
+    assert validation.validated_command["dispatch_recommendation_id"] == l1.recommendation_id
+    assert validation.validated_command["recipe_recommendation_id"] == l2.recommendation_id

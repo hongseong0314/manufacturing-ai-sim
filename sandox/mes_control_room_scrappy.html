@@ -1,0 +1,1120 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Semiconductor AI MES Control Room</title>
+  <style>
+    :root {
+      --ink: #161616;
+      --muted: #525252;
+      --subtle: #6f6f6f;
+      --canvas: #f4f4f4;
+      --surface: #ffffff;
+      --surface-alt: #f9f9f9;
+      --border: #d0d0d0;
+      --border-strong: #8d8d8d;
+      --blue: #0f62fe;
+      --blue-hover: #0043ce;
+      --cyan: #1192e8;
+      --green: #24a148;
+      --yellow: #f1c21b;
+      --orange: #ff832b;
+      --red: #da1e28;
+      --purple: #8a3ffc;
+      --purple-soft: #f6f2ff;
+      --shadow: 0 12px 32px rgba(0, 0, 0, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      color: var(--ink);
+      background: var(--canvas);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", sans-serif;
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--canvas);
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--border);
+      background: var(--surface);
+      padding: 16px;
+    }
+
+    .brand {
+      display: grid;
+      gap: 4px;
+      padding: 8px 4px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand strong {
+      font-size: 18px;
+      font-weight: 650;
+    }
+
+    .brand span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .nav-group {
+      display: grid;
+      gap: 4px;
+      margin-top: 18px;
+    }
+
+    .nav-label {
+      color: var(--subtle);
+      font-size: 11px;
+      font-weight: 600;
+      margin: 10px 4px 6px;
+      text-transform: uppercase;
+    }
+
+    .nav-item {
+      align-items: center;
+      border-left: 3px solid transparent;
+      color: var(--ink);
+      display: flex;
+      justify-content: space-between;
+      min-height: 36px;
+      padding: 8px 10px;
+      text-decoration: none;
+    }
+
+    .nav-item.active {
+      background: #edf5ff;
+      border-left-color: var(--blue);
+      color: var(--blue);
+      font-weight: 650;
+    }
+
+    .nav-item span:last-child {
+      color: var(--subtle);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .workspace {
+      min-width: 0;
+      padding: 20px;
+    }
+
+    .topbar {
+      align-items: center;
+      display: flex;
+      gap: 16px;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .title-block {
+      display: grid;
+      gap: 6px;
+    }
+
+    .title-block h1 {
+      font-size: 22px;
+      font-weight: 650;
+      line-height: 1.2;
+      margin: 0;
+    }
+
+    .meta-row {
+      align-items: center;
+      color: var(--muted);
+      display: flex;
+      flex-wrap: wrap;
+      font-size: 12px;
+      gap: 8px;
+    }
+
+    .command-row {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .button {
+      align-items: center;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      color: var(--ink);
+      cursor: pointer;
+      display: inline-flex;
+      font-size: 13px;
+      font-weight: 600;
+      min-height: 36px;
+      padding: 8px 12px;
+    }
+
+    .button.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #ffffff;
+    }
+
+    .button.primary:hover {
+      background: var(--blue-hover);
+    }
+
+    .layout {
+      display: grid;
+      gap: 16px;
+    }
+
+    .kpis {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      min-width: 0;
+    }
+
+    .panel.active {
+      border-color: var(--blue);
+    }
+
+    .panel-header {
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 12px;
+      justify-content: space-between;
+      min-height: 44px;
+      padding: 10px 12px;
+    }
+
+    .panel-header h2 {
+      font-size: 15px;
+      font-weight: 650;
+      margin: 0;
+    }
+
+    .panel-header span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .kpi {
+      min-height: 104px;
+      padding: 12px;
+    }
+
+    .kpi-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .kpi-value {
+      font-size: 26px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 650;
+      margin-top: 12px;
+    }
+
+    .kpi-note {
+      color: var(--subtle);
+      font-size: 12px;
+      margin-top: 8px;
+    }
+
+    .grid-main {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
+    }
+
+    .grid-secondary {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .stage-board {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      padding: 12px;
+    }
+
+    .stage {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      display: grid;
+      gap: 12px;
+      min-height: 206px;
+      padding: 12px;
+    }
+
+    .stage.focus {
+      border-color: var(--purple);
+      background: var(--purple-soft);
+    }
+
+    .stage-head {
+      align-items: start;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .stage-title {
+      display: grid;
+      gap: 4px;
+    }
+
+    .stage-title strong {
+      font-size: 16px;
+      font-weight: 650;
+    }
+
+    .stage-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .metric-grid {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .metric {
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      min-height: 54px;
+      padding: 8px;
+    }
+
+    .metric span {
+      color: var(--subtle);
+      display: block;
+      font-size: 11px;
+      margin-bottom: 6px;
+    }
+
+    .metric strong {
+      font-size: 16px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 650;
+    }
+
+    .bar {
+      background: #e0e0e0;
+      border-radius: 999px;
+      height: 8px;
+      overflow: hidden;
+    }
+
+    .bar i {
+      background: var(--blue);
+      display: block;
+      height: 100%;
+    }
+
+    .bar.warning i {
+      background: var(--orange);
+    }
+
+    .bar.good i {
+      background: var(--green);
+    }
+
+    .chain {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+    }
+
+    .chain-node {
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--purple);
+      border-radius: 6px;
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+    }
+
+    .chain-node.validation {
+      border-left-color: var(--green);
+    }
+
+    .chain-top {
+      align-items: center;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .chain-top strong {
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .chain-grid {
+      color: var(--muted);
+      display: grid;
+      font-size: 12px;
+      gap: 6px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .chain-grid code {
+      color: var(--ink);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+    }
+
+    .chain-arrow {
+      color: var(--subtle);
+      font-size: 12px;
+      padding-left: 18px;
+    }
+
+    .status {
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      display: inline-flex;
+      font-size: 11px;
+      font-weight: 650;
+      gap: 6px;
+      height: 22px;
+      padding: 0 8px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .status::before {
+      border-radius: 999px;
+      content: "";
+      display: block;
+      height: 7px;
+      width: 7px;
+    }
+
+    .status.green {
+      background: #defbe6;
+      border-color: #a7f0ba;
+      color: #0e6027;
+    }
+
+    .status.green::before {
+      background: var(--green);
+    }
+
+    .status.yellow {
+      background: #fcf4d6;
+      border-color: #fddc69;
+      color: #684e00;
+    }
+
+    .status.yellow::before {
+      background: var(--yellow);
+    }
+
+    .status.orange {
+      background: #fff2e8;
+      border-color: #ffd9be;
+      color: #8a3800;
+    }
+
+    .status.orange::before {
+      background: var(--orange);
+    }
+
+    .status.red {
+      background: #fff1f1;
+      border-color: #ffb3b8;
+      color: #a2191f;
+    }
+
+    .status.red::before {
+      background: var(--red);
+    }
+
+    .status.blue {
+      background: #edf5ff;
+      border-color: #bae6ff;
+      color: #0043ce;
+    }
+
+    .status.blue::before {
+      background: var(--blue);
+    }
+
+    .status.purple {
+      background: #f6f2ff;
+      border-color: #e8daff;
+      color: #6929c4;
+    }
+
+    .status.purple::before {
+      background: var(--purple);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    table {
+      border-collapse: collapse;
+      min-width: 760px;
+      width: 100%;
+    }
+
+    th {
+      background: var(--surface-alt);
+      color: var(--subtle);
+      font-size: 11px;
+      font-weight: 650;
+      height: 36px;
+      text-align: left;
+      text-transform: uppercase;
+    }
+
+    td,
+    th {
+      border-bottom: 1px solid var(--border);
+      padding: 8px 10px;
+      white-space: nowrap;
+    }
+
+    td {
+      color: var(--ink);
+      font-size: 13px;
+      height: 44px;
+    }
+
+    td.muted {
+      color: var(--muted);
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .rule-grid {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      padding: 12px;
+    }
+
+    .rule-item {
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 8px;
+      justify-content: space-between;
+      min-height: 40px;
+      padding: 4px 0;
+    }
+
+    .command-preview {
+      background: #262626;
+      border-radius: 0 0 6px 6px;
+      color: #f4f4f4;
+      font-size: 12px;
+      margin: 0;
+      overflow-x: auto;
+      padding: 12px;
+    }
+
+    .equipment-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      padding: 12px;
+    }
+
+    .equipment {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      display: grid;
+      gap: 10px;
+      min-height: 140px;
+      padding: 10px;
+    }
+
+    .equipment h3 {
+      font-size: 14px;
+      margin: 0;
+    }
+
+    .equipment dl {
+      display: grid;
+      gap: 6px;
+      grid-template-columns: 1fr 1fr;
+      margin: 0;
+    }
+
+    .equipment dt {
+      color: var(--subtle);
+      font-size: 11px;
+    }
+
+    .equipment dd {
+      font-size: 12px;
+      font-weight: 600;
+      margin: 0;
+      text-align: right;
+    }
+
+    .timeline {
+      display: grid;
+      padding: 0 12px 12px;
+    }
+
+    .event-row {
+      border-bottom: 1px solid var(--border);
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 108px minmax(0, 1fr) auto;
+      min-height: 52px;
+      padding: 10px 0;
+    }
+
+    .event-row:last-child {
+      border-bottom: 0;
+    }
+
+    .event-row strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .event-row span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .evaluator {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+    }
+
+    .check {
+      align-items: center;
+      display: flex;
+      justify-content: space-between;
+      min-height: 34px;
+      padding: 4px 0;
+    }
+
+    .check span:first-child {
+      color: var(--ink);
+      font-size: 13px;
+    }
+
+    @media (max-width: 1200px) {
+      .kpis {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .grid-main,
+      .grid-secondary {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 900px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        border-bottom: 1px solid var(--border);
+        border-right: 0;
+      }
+
+      .nav-group {
+        display: flex;
+        flex-wrap: wrap;
+      }
+
+      .nav-label {
+        flex-basis: 100%;
+      }
+
+      .topbar {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .command-row {
+        justify-content: flex-start;
+      }
+
+      .stage-board,
+      .equipment-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .workspace {
+        padding: 12px;
+      }
+
+      .kpis {
+        grid-template-columns: 1fr;
+      }
+
+      .rule-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .chain-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .event-row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <strong>Semiconductor AI MES</strong>
+        <span>Simulator-backed execution control</span>
+      </div>
+
+      <nav class="nav-group" aria-label="MES sections">
+        <div class="nav-label">Operate</div>
+        <a class="nav-item active" href="#fab"><span>Fab Control</span><span>Live</span></a>
+        <a class="nav-item" href="#dispatch"><span>Dispatch Board</span><span>12</span></a>
+        <a class="nav-item" href="#chain"><span>Decision Chain</span><span>L4-L2</span></a>
+        <a class="nav-item" href="#equipment"><span>Equipment</span><span>6</span></a>
+        <div class="nav-label">Trace</div>
+        <a class="nav-item" href="#events"><span>Events</span><span>18</span></a>
+        <a class="nav-item" href="#evaluator"><span>Evaluator</span><span>Pass</span></a>
+      </nav>
+    </aside>
+
+    <main class="workspace" id="fab">
+      <header class="topbar">
+        <div class="title-block">
+          <h1>Fab Control Room</h1>
+          <div class="meta-row">
+            <span>sim_time: 128</span>
+            <span>correlation_id: <code>CORR_20260430_001</code></span>
+            <span class="status green">Rule gate passed</span>
+            <span class="status purple">AI recommendation</span>
+          </div>
+        </div>
+        <div class="command-row">
+          <button class="button">Replay chain</button>
+          <button class="button">Validate</button>
+          <button class="button primary">Run cycle</button>
+        </div>
+      </header>
+
+      <div class="layout">
+        <section class="kpis" aria-label="Fab KPIs">
+          <div class="panel kpi">
+            <div class="kpi-label">Total WIP</div>
+            <div class="kpi-value">42</div>
+            <div class="kpi-note">A 18 / B 15 / C 9</div>
+          </div>
+          <div class="panel kpi">
+            <div class="kpi-label">Completed</div>
+            <div class="kpi-value">8</div>
+            <div class="kpi-note">+2 this cycle</div>
+          </div>
+          <div class="panel kpi">
+            <div class="kpi-label">Utilization</div>
+            <div class="kpi-value">78%</div>
+            <div class="kpi-note">A bottleneck rising</div>
+          </div>
+          <div class="panel kpi">
+            <div class="kpi-label">Queue Risk</div>
+            <div class="kpi-value">5</div>
+            <div class="kpi-note">2 rework lots</div>
+          </div>
+          <div class="panel kpi">
+            <div class="kpi-label">AI Confidence</div>
+            <div class="kpi-value">1.00</div>
+            <div class="kpi-note">rule-only baseline</div>
+          </div>
+          <div class="panel kpi">
+            <div class="kpi-label">Command</div>
+            <div class="kpi-value">1</div>
+            <div class="kpi-note">ready for step</div>
+          </div>
+        </section>
+
+        <section class="grid-main">
+          <div class="panel active">
+            <div class="panel-header">
+              <h2>Stage Board</h2>
+              <span>Simulator kernel A/B/C mapped to MES operations</span>
+            </div>
+            <div class="stage-board">
+              <article class="stage focus">
+                <div class="stage-head">
+                  <div class="stage-title">
+                    <strong>A · Process QA</strong>
+                    <span>target_stage from L3</span>
+                  </div>
+                  <span class="status purple">Focus</span>
+                </div>
+                <div class="metric-grid">
+                  <div class="metric"><span>Wait</span><strong>18</strong></div>
+                  <div class="metric"><span>Rework</span><strong>2</strong></div>
+                  <div class="metric"><span>Idle EQP</span><strong>1</strong></div>
+                  <div class="metric"><span>Incoming</span><strong>0</strong></div>
+                </div>
+                <div class="bar warning"><i style="width: 86%"></i></div>
+              </article>
+
+              <article class="stage">
+                <div class="stage-head">
+                  <div class="stage-title">
+                    <strong>B · Clean QA</strong>
+                    <span>incoming from A</span>
+                  </div>
+                  <span class="status blue">Monitor</span>
+                </div>
+                <div class="metric-grid">
+                  <div class="metric"><span>Wait</span><strong>10</strong></div>
+                  <div class="metric"><span>Rework</span><strong>1</strong></div>
+                  <div class="metric"><span>Idle EQP</span><strong>1</strong></div>
+                  <div class="metric"><span>Incoming</span><strong>5</strong></div>
+                </div>
+                <div class="bar good"><i style="width: 62%"></i></div>
+              </article>
+
+              <article class="stage">
+                <div class="stage-head">
+                  <div class="stage-title">
+                    <strong>C · Packing</strong>
+                    <span>finalization queue</span>
+                  </div>
+                  <span class="status green">Stable</span>
+                </div>
+                <div class="metric-grid">
+                  <div class="metric"><span>Wait</span><strong>4</strong></div>
+                  <div class="metric"><span>Rework</span><strong>0</strong></div>
+                  <div class="metric"><span>Idle EQP</span><strong>1</strong></div>
+                  <div class="metric"><span>Incoming</span><strong>5</strong></div>
+                </div>
+                <div class="bar good"><i style="width: 44%"></i></div>
+              </article>
+            </div>
+          </div>
+
+          <div class="panel" id="chain">
+            <div class="panel-header">
+              <h2>Decision Chain Inspector</h2>
+              <span><code>CORR_20260430_001</code></span>
+            </div>
+            <div class="chain">
+              <article class="chain-node">
+                <div class="chain-top">
+                  <strong>L4 · OBJECTIVE</strong>
+                  <span class="status purple">Selected</span>
+                </div>
+                <div class="chain-grid">
+                  <span>recommendation <code>REC_L4_001</code></span>
+                  <span>feature <code>FS_L4_001</code></span>
+                  <span>objective <code>OBJ_RULE_ONLY_BALANCED</code></span>
+                  <span>confidence <code>1.00</code></span>
+                </div>
+              </article>
+              <div class="chain-arrow">parent -> REC_L4_001</div>
+              <article class="chain-node">
+                <div class="chain-top">
+                  <strong>L3 · STAGE_PRIORITY</strong>
+                  <span class="status purple">A first</span>
+                </div>
+                <div class="chain-grid">
+                  <span>recommendation <code>REC_L3_001</code></span>
+                  <span>feature <code>FS_L3_001</code></span>
+                  <span>target_stage <code>A</code></span>
+                  <span>priority <code>1.00</code></span>
+                </div>
+              </article>
+              <div class="chain-arrow">parent -> REC_L3_001</div>
+              <article class="chain-node">
+                <div class="chain-top">
+                  <strong>L1 · DISPATCH</strong>
+                  <span class="status purple">Candidate #1</span>
+                </div>
+                <div class="chain-grid">
+                  <span>recommendation <code>REC_L1_001</code></span>
+                  <span>feature <code>FS_L1_001</code></span>
+                  <span>equipment <code>A_0</code></span>
+                  <span>task_uids <code>[1, 2]</code></span>
+                </div>
+              </article>
+              <div class="chain-arrow">parent -> REC_L1_001</div>
+              <article class="chain-node">
+                <div class="chain-top">
+                  <strong>L2 · RECIPE</strong>
+                  <span class="status purple">Default</span>
+                </div>
+                <div class="chain-grid">
+                  <span>recommendation <code>REC_L2_001</code></span>
+                  <span>feature <code>FS_L2_001</code></span>
+                  <span>recipe <code>SIM_A_DEFAULT</code></span>
+                  <span>params <code>[10, 2, 1]</code></span>
+                </div>
+              </article>
+              <article class="chain-node validation">
+                <div class="chain-top">
+                  <strong>Rule Validation</strong>
+                  <span class="status green">Passed</span>
+                </div>
+                <div class="chain-grid">
+                  <span>command <code>RESERVE_AND_TRACK_IN</code></span>
+                  <span>adapter <code>simulator action</code></span>
+                </div>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="grid-main" id="dispatch">
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Dispatch Candidates</h2>
+              <span>Layer 1 output before Rule Engine validation</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Rank</th>
+                    <th>Stage</th>
+                    <th>Equipment</th>
+                    <th>Task / Wafer IDs</th>
+                    <th>Task Type</th>
+                    <th>Rule Precheck</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>1</td>
+                    <td>A</td>
+                    <td><code>A_0</code></td>
+                    <td><code>[1, 2]</code></td>
+                    <td>new</td>
+                    <td><span class="status green">Eligible</span></td>
+                    <td class="muted">idle equipment, first available batch</td>
+                  </tr>
+                  <tr>
+                    <td>2</td>
+                    <td>B</td>
+                    <td><code>B_0</code></td>
+                    <td><code>[9]</code></td>
+                    <td>incoming</td>
+                    <td><span class="status blue">Monitor</span></td>
+                    <td class="muted">wait for upstream completion</td>
+                  </tr>
+                  <tr>
+                    <td>3</td>
+                    <td>C</td>
+                    <td><code>C_0</code></td>
+                    <td><code>[15]</code></td>
+                    <td>pack</td>
+                    <td><span class="status yellow">Pending</span></td>
+                    <td class="muted">packing queue not prioritized</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Rule Engine Gate</h2>
+              <span>L1 dispatch + L2 recipe combined validation</span>
+            </div>
+            <div class="rule-grid">
+              <div class="rule-item"><span>Correlation id</span><span class="status green">Match</span></div>
+              <div class="rule-item"><span>Equipment availability</span><span class="status green">Idle</span></div>
+              <div class="rule-item"><span>Task availability</span><span class="status green">Available</span></div>
+              <div class="rule-item"><span>Recipe fields</span><span class="status green">Ready</span></div>
+              <div class="rule-item"><span>Parent chain</span><span class="status green">Valid</span></div>
+              <div class="rule-item"><span>Simulator action</span><span class="status green">Mapped</span></div>
+            </div>
+            <pre class="command-preview">{
+  "A": {
+    "A_0": {
+      "task_uids": [1, 2],
+      "task_type": "new",
+      "recipe": [10, 2, 1],
+      "replace_consumable": false
+    }
+  },
+  "B": {},
+  "C": {}
+}</pre>
+          </div>
+        </section>
+
+        <section class="grid-secondary" id="equipment">
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Equipment Matrix</h2>
+              <span>Simulator machines as MES equipment</span>
+            </div>
+            <div class="equipment-grid">
+              <article class="equipment">
+                <div class="stage-head">
+                  <h3>A_0</h3>
+                  <span class="status green">Idle</span>
+                </div>
+                <dl>
+                  <dt>Batch</dt><dd>2</dd>
+                  <dt>Operation</dt><dd>A</dd>
+                  <dt>Age</dt><dd>13</dd>
+                  <dt>Current</dt><dd>-</dd>
+                </dl>
+              </article>
+              <article class="equipment">
+                <div class="stage-head">
+                  <h3>B_0</h3>
+                  <span class="status blue">Run</span>
+                </div>
+                <dl>
+                  <dt>Batch</dt><dd>1</dd>
+                  <dt>Operation</dt><dd>B</dd>
+                  <dt>Solution</dt><dd>48.2</dd>
+                  <dt>Current</dt><dd>WAFER_9</dd>
+                </dl>
+              </article>
+              <article class="equipment">
+                <div class="stage-head">
+                  <h3>C_0</h3>
+                  <span class="status green">Idle</span>
+                </div>
+                <dl>
+                  <dt>Batch</dt><dd>4</dd>
+                  <dt>Operation</dt><dd>C</dd>
+                  <dt>Pack</dt><dd>Ready</dd>
+                  <dt>Current</dt><dd>-</dd>
+                </dl>
+              </article>
+            </div>
+          </div>
+
+          <div class="panel" id="events">
+            <div class="panel-header">
+              <h2>Event Timeline</h2>
+              <span>Audit trail for active correlation</span>
+            </div>
+            <div class="timeline">
+              <div class="event-row">
+                <span>t=128.00</span>
+                <div><strong>OBJECTIVE_SELECTED</strong><span>REC_L4_001 created by MESPlannerAgent</span></div>
+                <span class="status purple">L4</span>
+              </div>
+              <div class="event-row">
+                <span>t=128.01</span>
+                <div><strong>STAGE_PRIORITY_UPDATED</strong><span>Stage A selected from eligible candidates</span></div>
+                <span class="status purple">L3</span>
+              </div>
+              <div class="event-row">
+                <span>t=128.02</span>
+                <div><strong>DISPATCH_RECOMMENDED</strong><span>A_0 receives task_uids [1, 2]</span></div>
+                <span class="status purple">L1</span>
+              </div>
+              <div class="event-row">
+                <span>t=128.03</span>
+                <div><strong>RULE_VALIDATION_PASSED</strong><span>Command mapped to ManufacturingEnv.step actions</span></div>
+                <span class="status green">Rule</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="grid-secondary" id="evaluator">
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Evaluator Connectivity</h2>
+              <span>Development harness checks</span>
+            </div>
+            <div class="evaluator">
+              <div class="check"><span>Required layers present</span><span class="status green">Pass</span></div>
+              <div class="check"><span>Single correlation id</span><span class="status green">Pass</span></div>
+              <div class="check"><span>Feature snapshots attached</span><span class="status green">Pass</span></div>
+              <div class="check"><span>Parent chain intact</span><span class="status green">Pass</span></div>
+              <div class="check"><span>Rule validation passed</span><span class="status green">Pass</span></div>
+              <div class="check"><span>Simulator action matched command</span><span class="status green">Pass</span></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Next API Binding</h2>
+              <span>Mock data replacement targets</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Panel</th>
+                    <th>API</th>
+                    <th>Source</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td>Stage Board</td><td><code>GET /api/v1/wip</code></td><td>MESDecisionService</td></tr>
+                  <tr><td>Dispatch Candidates</td><td><code>GET /api/v1/dispatch/candidates</code></td><td>dispatch_candidates</td></tr>
+                  <tr><td>Decision Chain</td><td><code>GET /api/v1/ai/recommendations</code></td><td>MESDevelopmentHarness</td></tr>
+                  <tr><td>Rule Gate</td><td><code>POST /api/v1/rules/validate</code></td><td>MESRuleEngine</td></tr>
+                  <tr><td>Events</td><td><code>GET /api/v1/events</code></td><td>planned audit store</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+</body>
+</html>

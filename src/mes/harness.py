@@ -5,8 +5,21 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 import copy
+import math
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from src.environment.process_a_env import (
+    BETA,
+    BETA_K,
+    B_BASE,
+    DELTA_B,
+    DELTA_W1,
+    DELTA_W12,
+    W12_BASE,
+    W1_BASE,
+    W2_BASE,
+    W3_BASE,
+)
 from src.mes.domain import (
     AIRecommendation,
     FeatureSnapshot,
@@ -339,6 +352,7 @@ class MESGeneratorAgent:
                 "candidate_count": len(candidates),
             },
         )
+        dispatch_action = candidates[0]
         dispatch = create_recommendation(
             recommendation_type="DISPATCH" if plan.target_stage != "C" else "PACK",
             layer_id="L1",
@@ -350,12 +364,17 @@ class MESGeneratorAgent:
             correlation_id=plan.correlation_id,
             parent_recommendation_id=plan.stage_priority.recommendation_id,
             candidate_actions=candidates,
-            recommended_action=candidates[0],
+            recommended_action=dispatch_action,
             score=1.0,
             confidence=1.0,
             reasons=["selected_first_rule_eligible_candidate"],
         )
 
+        recipe_action = self._default_recipe_action(
+            plan.target_stage,
+            dispatch_action=dispatch_action,
+            decision_state=decision_state,
+        )
         l2_snapshot = self.service.create_feature_snapshot(
             decision_state,
             layer_id="L2",
@@ -363,6 +382,8 @@ class MESGeneratorAgent:
             features={
                 "target_stage": plan.target_stage,
                 "dispatch_recommendation_id": dispatch.recommendation_id,
+                "equipment_id": dispatch_action.get("equipment_id"),
+                "apc_policy": recipe_action.get("apc_policy"),
             },
         )
         recipe = create_recommendation(
@@ -375,11 +396,11 @@ class MESGeneratorAgent:
             feature_snapshot_id=l2_snapshot.feature_snapshot_id,
             correlation_id=plan.correlation_id,
             parent_recommendation_id=dispatch.recommendation_id,
-            candidate_actions=[self._default_recipe_action(plan.target_stage)],
-            recommended_action=self._default_recipe_action(plan.target_stage),
+            candidate_actions=[recipe_action],
+            recommended_action=recipe_action,
             score=1.0,
             confidence=1.0,
-            reasons=["default_recipe_for_simulator_stage"],
+            reasons=[recipe_action.get("selection_reason", "default_recipe_for_simulator_stage")],
         )
 
         recommendations = [plan.objective, plan.stage_priority, dispatch, recipe]
@@ -442,15 +463,14 @@ class MESGeneratorAgent:
         cloned[stage] = stage_state
         return cloned
 
-    def _default_recipe_action(self, stage: str) -> Dict[str, Any]:
+    def _default_recipe_action(
+        self,
+        stage: str,
+        dispatch_action: Optional[Dict[str, Any]] = None,
+        decision_state: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         if stage == "A":
-            return {
-                "recipe_id": "SIM_A_DEFAULT",
-                "recipe": [10, 2, 1],
-                "parameters": {"temp": 10, "flow": 2, "duration": 1},
-                "replace_consumable": False,
-                "apc_mode": "L1L2_COMPOSED",
-            }
+            return self._recipe_action_a(dispatch_action or {}, decision_state or {})
         if stage == "B":
             return {
                 "recipe_id": "SIM_B_DEFAULT",
@@ -460,6 +480,139 @@ class MESGeneratorAgent:
                 "apc_mode": "L1L2_COMPOSED",
             }
         return {"recipe_id": "SIM_C_NO_RECIPE", "recipe": [], "apc_mode": "L1L2_COMPOSED"}
+
+    def _recipe_action_a(
+        self,
+        dispatch_action: Dict[str, Any],
+        decision_state: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        equipment_id = str(dispatch_action.get("equipment_id", ""))
+        machine_state = self._machine_state(decision_state, "A", equipment_id)
+        task_rows = self._task_rows(decision_state, dispatch_action.get("task_uids", []))
+        spec_low, spec_high = self._spec_window(task_rows, "spec_a", (47.1, 52.9))
+        target = (spec_low + spec_high) / 2.0
+        current_u = float(machine_state.get("u", 0))
+        current_age = float(machine_state.get("m_age", 0))
+
+        recipes = [
+            ("SIM_A_BASE", [10.0, 2.0, 1.0]),
+            ("SIM_A_MEDIUM_APC", [12.0, 2.5, 1.2]),
+            ("SIM_A_STRONG_APC", [15.0, 3.0, 1.5]),
+            ("SIM_A_AGE_APC", [18.0, 4.0, 2.0]),
+        ]
+        must_refresh = current_u >= 5
+        candidates = []
+        for recipe_id, recipe in recipes:
+            for replace_consumable in (False, True):
+                if must_refresh and not replace_consumable:
+                    continue
+                predicted_qa = self._predict_a_qa(
+                    recipe=recipe,
+                    current_u=current_u,
+                    current_age=current_age,
+                    replace_consumable=replace_consumable,
+                )
+                in_spec = spec_low <= predicted_qa <= spec_high
+                distance = abs(predicted_qa - target) if in_spec else (
+                    min(abs(predicted_qa - spec_low), abs(predicted_qa - spec_high)) + 100.0
+                )
+                replacement_penalty = 0.0 if must_refresh else (0.35 if replace_consumable else 0.0)
+                recipe_penalty = 0.02 * sum(recipe)
+                candidates.append(
+                    {
+                        "recipe_id": recipe_id,
+                        "recipe": recipe,
+                        "replace_consumable": replace_consumable,
+                        "predicted_qa": predicted_qa,
+                        "in_spec": in_spec,
+                        "score": distance + replacement_penalty + recipe_penalty,
+                    }
+                )
+
+        selected = min(candidates, key=lambda item: item["score"])
+        recipe = selected["recipe"]
+        if selected["replace_consumable"]:
+            reason = "apc_refresh_consumable_before_quality_drift"
+        elif selected["recipe_id"] != "SIM_A_BASE":
+            reason = "apc_recipe_compensates_machine_age_or_consumable_use"
+        else:
+            reason = "default_recipe_within_spec"
+
+        return {
+            "recipe_id": selected["recipe_id"],
+            "recipe": recipe,
+            "parameters": {"temp": recipe[0], "flow": recipe[1], "duration": recipe[2]},
+            "replace_consumable": bool(selected["replace_consumable"]),
+            "apc_mode": "L1L2_COMPOSED",
+            "apc_policy": "A_SPEC_WINDOW_GRID_SEARCH",
+            "predicted_qa": round(float(selected["predicted_qa"]), 4),
+            "target_spec": {"low": spec_low, "high": spec_high, "target": target},
+            "machine_state": {"u": current_u, "m_age": current_age},
+            "selection_reason": reason,
+        }
+
+    def _machine_state(
+        self,
+        decision_state: Dict[str, Any],
+        stage: str,
+        equipment_id: str,
+    ) -> Dict[str, Any]:
+        machines = decision_state.get(stage, {}).get("machines", {})
+        if equipment_id in machines and isinstance(machines[equipment_id], dict):
+            return machines[equipment_id]
+        suffix = equipment_id.split("_")[-1]
+        for machine_id, machine_state in machines.items():
+            if str(machine_id).split("_")[-1] == suffix and isinstance(machine_state, dict):
+                return machine_state
+        return {}
+
+    def _task_rows(
+        self,
+        decision_state: Dict[str, Any],
+        task_uids: Any,
+    ) -> List[Dict[str, Any]]:
+        tasks = decision_state.get("tasks", {})
+        rows = []
+        for uid in task_uids if isinstance(task_uids, list) else []:
+            row = tasks.get(uid) or tasks.get(str(uid))
+            if isinstance(row, dict):
+                rows.append(row)
+        return rows
+
+    def _spec_window(
+        self,
+        task_rows: List[Dict[str, Any]],
+        key: str,
+        default: tuple[float, float],
+    ) -> tuple[float, float]:
+        lows = []
+        highs = []
+        for row in task_rows:
+            spec = row.get(key)
+            if not isinstance(spec, (list, tuple)) or len(spec) != 2:
+                continue
+            lows.append(float(spec[0]))
+            highs.append(float(spec[1]))
+        if not lows or not highs:
+            return default
+        return max(lows), min(highs)
+
+    def _predict_a_qa(
+        self,
+        recipe: List[float],
+        current_u: float,
+        current_age: float,
+        replace_consumable: bool,
+    ) -> float:
+        s1, s2, s3 = recipe
+        expected_u = 1.0 if replace_consumable else current_u + 1.0
+        expected_age = current_age + 1.0
+        w1 = W1_BASE * (1 - DELTA_W1 * expected_age)
+        w12 = W12_BASE * (1 - DELTA_W12 * expected_age)
+        b = B_BASE - DELTA_B * expected_age
+        g_s = (w1 * s1 + W2_BASE * s2 + W3_BASE * s3 + b) + (w12 * s1 * s2)
+        effectiveness = 1 - BETA * math.tanh(BETA_K * expected_u)
+        return float(g_s * effectiveness)
 
 
 class MESEvaluatorAgent:

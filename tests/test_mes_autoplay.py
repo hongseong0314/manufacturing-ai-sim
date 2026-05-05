@@ -41,11 +41,73 @@ def test_auto_cycle_dispatches_across_idle_a_equipment():
     assert payload['count'] >= len(a_actions)
 
 
+def test_gantt_endpoint_exposes_flow_and_stage_schedule():
+    client.post('/api/v2/simulation/reset')
+    initial = client.get('/api/v2/gantt')
+    assert initial.status_code == 200
+    body = initial.json()
+    assert [item['stage'] for item in body['flow']] == ['A', 'B', 'C']
+    assert body['horizon']['end'] > body['horizon']['start']
+    planned_a = next(
+        bar for bar in body['bars']
+        if bar['stage'] == 'A' and bar['status'] == 'planned'
+    )
+    assert planned_a['duration'] == 20
+    assert planned_a['label'].startswith('Next T')
+
+    client.post('/api/v2/harness/run-cycle', json={'target_stage': 'AUTO'})
+    active = client.get('/api/v2/gantt').json()
+    assert active['time'] >= 1
+    assert active['stage_views']['A']['rows']
+    assert any(
+        bar['source'] == 'event_log' and bar['stage'] == 'A'
+        for bar in active['stage_views']['A']['bars']
+    )
+
+
+def test_gantt_window_and_a_apc_prevent_rework_wall():
+    client.post('/api/v2/simulation/reset')
+    client.post(
+        '/api/v2/simulation/autoplay/start',
+        json={'target_stage': 'AUTO', 'generate_every': 20, 'bootstrap_cycles': 0},
+    )
+    live = client.get(
+        '/api/v2/simulation/autoplay/status?step_cycles=90'
+    ).json()['live']
+
+    assert live['time'] >= 90
+    assert live['kpis']['yield_proxy'] >= 0.95
+    assert live['stages']['A']['rework'] == 0
+
+    gantt = client.get('/api/v2/gantt').json()
+    assert gantt['horizon']['start'] > 0
+    assert gantt['horizon']['span'] <= 48
+    assert gantt['visible_bar_count'] < gantt['total_bar_count']
+    assert any(
+        bar['stage'] == 'C'
+        and bar['task_type'] == 'pack'
+        and bar['duration'] == 2
+        and bar['stack_size'] > 1
+        for bar in gantt['bars']
+    )
+    assert all(row['machine_id'] != 'C_BUFFER' for row in gantt['rows'])
+    assert all(bar['machine_id'] != 'C_BUFFER' for bar in gantt['bars'])
+    assert all(
+        len(bar.get('batch_task_uids', [])) == 4
+        for bar in gantt['bars']
+        if bar['stage'] == 'C' and bar['task_type'] == 'pack'
+    )
+
+
 def test_mes_screen_serves_live_control_room():
     r = client.get('/mes')
     assert r.status_code == 200
     assert 'Fab Control Room' in r.text
     assert '/api/v2/fab/live' in r.text
+    assert '/api/v2/gantt' in r.text
+    assert '/api/v2/equipment/${equipmentId}/detail' in r.text
+    assert 'Global Gantt' in r.text
+    assert 'Machine Detail' in r.text
 
 
 def test_auto_mode_moves_tasks_through_completed_flow():
@@ -55,11 +117,11 @@ def test_auto_mode_moves_tasks_through_completed_flow():
         json={'target_stage': 'AUTO', 'generate_every': 20, 'bootstrap_cycles': 0},
     )
     live = {}
-    for _ in range(20):
+    for _ in range(35):
         live = client.get(
             '/api/v2/simulation/autoplay/status?step_cycles=1'
         ).json()['live']
-    assert live['time'] >= 20
+    assert live['time'] >= 35
     assert live['kpis']['completed'] > 0
     assert live['kpis']['total_wip'] >= 0
     assert live['active_chain']['counts']['recommendations'] >= 4

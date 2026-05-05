@@ -169,20 +169,18 @@ class ProcessB_Env:
             if machine.status != "busy" or current_time < machine.finish_time:
                 continue
 
-            recipe_used = machine.current_recipe if machine.current_recipe else [0.0, 0.0, 0.0]
+            recipe_used = (
+                list(machine.current_recipe)
+                if machine.current_recipe
+                else [0.0, 0.0, 0.0]
+            )
             finished_batch = machine.finish_processing()
 
             task_uids = [task.uid for task in finished_batch]
-            self.event_log.append(
-                {
-                    "timestamp": current_time,
-                    "event_type": "task_completed",
-                    "process": "B",
-                    "machine_id": machine.id,
-                    "task_uids": task_uids,
-                    "end_time": current_time,
-                }
-            )
+            quality_values: List[float] = []
+            target_specs: List[Dict[str, Any]] = []
+            pass_count = 0
+            fail_count = 0
 
             for task in finished_batch:
                 qa_result = self._run_qa_check(machine, recipe_used, task)
@@ -192,6 +190,7 @@ class ProcessB_Env:
                     task.location = "QUEUE_C"
                     task.realized_qa_B = qa_result["realized_qa"]
                     self.stats["total_passed"] += 1
+                    pass_count += 1
                     print(
                         f"  t={current_time}: Task {task.uid:3d} inspection PASS "
                         f"(qa={qa_result['realized_qa']:.2f})"
@@ -202,6 +201,7 @@ class ProcessB_Env:
                     task.rework_count += 1
                     self.rework_pool.append(task)
                     self.stats["total_reworked"] += 1
+                    fail_count += 1
                     print(
                         f"  t={current_time}: Task {task.uid:3d} inspection FAIL "
                         f"(qa={qa_result['realized_qa']:.2f})"
@@ -217,6 +217,39 @@ class ProcessB_Env:
                         "rework_count": task.rework_count,
                     }
                 )
+                quality_values.append(float(qa_result["realized_qa"]))
+                target_specs.append(
+                    {
+                        "task_uid": task.uid,
+                        "low": float(task.spec_b[0]),
+                        "high": float(task.spec_b[1]),
+                    }
+                )
+
+            avg_quality = (
+                sum(quality_values) / len(quality_values)
+                if quality_values
+                else None
+            )
+            self.event_log.append(
+                {
+                    "timestamp": current_time,
+                    "event_type": "task_completed",
+                    "process": "B",
+                    "machine_id": machine.id,
+                    "task_uids": task_uids,
+                    "end_time": current_time,
+                    "recipe": recipe_used,
+                    "quality_values": quality_values,
+                    "avg_quality": avg_quality,
+                    "pass_count": pass_count,
+                    "fail_count": fail_count,
+                    "passed": fail_count == 0,
+                    "v": getattr(machine, "v", 0),
+                    "b_age": getattr(machine, "b_age", 0),
+                    "target_specs": target_specs,
+                }
+            )
 
             self.stats["total_processed"] += len(finished_batch)
 
@@ -269,7 +302,11 @@ class ProcessB_Env:
                 if not can_assign or len(batch) != len(task_uids):
                     continue
 
-                if assignment.get("replace_solution", False):
+                replace_solution = bool(assignment.get("replace_solution", False))
+                v_before = getattr(machine, "v", 0)
+                b_age_before = getattr(machine, "b_age", 0)
+
+                if replace_solution:
                     machine.replace_solution()
                     solution_replacements_this_step += 1
                     self.stats["solution_replacements"] += 1
@@ -289,6 +326,12 @@ class ProcessB_Env:
                         "task_uids": task_uids,
                         "start_time": current_time,
                         "end_time": finish_time,
+                        "recipe": list(recipe),
+                        "replace_solution": replace_solution,
+                        "v_before": v_before,
+                        "v_after_start": getattr(machine, "v", 0),
+                        "b_age_before": b_age_before,
+                        "b_age_after_start": getattr(machine, "b_age", 0),
                         "task_type": assignment.get("task_type", "external_action"),
                     }
                 )

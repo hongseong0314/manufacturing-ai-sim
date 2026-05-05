@@ -72,13 +72,25 @@ class ProcessA_Env:
             realized_qa = np.random.normal(mean_qa, std_dev_noise)
 
         passed = task.spec_a[0] <= realized_qa <= task.spec_a[1]
+        task.realized_qa_A = float(realized_qa)
         status = "PASS" if passed else "FAIL"
         print(
             f"  QA {status}: Task {task.uid:3d}, realized_qa={realized_qa:.2f}, "
             f"spec=({task.spec_a[0]:.1f}, {task.spec_a[1]:.1f}), g_s={g_s:.2f}"
         )
 
-        task.history.append({"time": current_time, "process": "A", "qa": realized_qa})
+        task.history.append(
+            {
+                "time": current_time,
+                "process": "A",
+                "qa": realized_qa,
+                "realized_qa": realized_qa,
+                "passed": passed,
+                "recipe": list(recipe),
+                "u": getattr(machine, "u", 0),
+                "m_age": getattr(machine, "m_age", 0),
+            }
+        )
         return passed
 
     def _resolve_machine(self, machine_key: Any) -> Optional[ProcessA_Machine]:
@@ -143,25 +155,20 @@ class ProcessA_Env:
             if machine.status != "busy" or current_time < machine.finish_time:
                 continue
 
-            recipe_used = machine.current_recipe if machine.current_recipe else [10, 2, 1]
+            recipe_used = list(machine.current_recipe) if machine.current_recipe else [10, 2, 1]
             finished_batch = machine.finish_processing()
 
             task_uids = [t.uid for t in finished_batch]
-            self.event_log.append(
-                {
-                    "timestamp": current_time,
-                    "event_type": "task_completed",
-                    "process": "A",
-                    "machine_id": machine.id,
-                    "task_uids": task_uids,
-                    "end_time": current_time,
-                }
-            )
+            quality_values: List[float] = []
+            target_specs: List[Dict[str, Any]] = []
+            pass_count = 0
+            fail_count = 0
 
             for task in finished_batch:
                 if self._run_qa_check(machine, recipe_used, task, current_time):
                     succeeded_tasks.append(task)
                     self.stats["total_passed"] += 1
+                    pass_count += 1
                 else:
                     task.location = "REWORK_A"
                     task.rework_count += 1
@@ -170,6 +177,40 @@ class ProcessA_Env:
                     )
                     self.rework_pool.append(task)
                     self.stats["total_reworked"] += 1
+                    fail_count += 1
+                quality_values.append(float(task.realized_qa_A))
+                target_specs.append(
+                    {
+                        "task_uid": task.uid,
+                        "low": float(task.spec_a[0]),
+                        "high": float(task.spec_a[1]),
+                    }
+                )
+
+            avg_quality = (
+                sum(quality_values) / len(quality_values)
+                if quality_values
+                else None
+            )
+            self.event_log.append(
+                {
+                    "timestamp": current_time,
+                    "event_type": "task_completed",
+                    "process": "A",
+                    "machine_id": machine.id,
+                    "task_uids": task_uids,
+                    "end_time": current_time,
+                    "recipe": recipe_used,
+                    "quality_values": quality_values,
+                    "avg_quality": avg_quality,
+                    "pass_count": pass_count,
+                    "fail_count": fail_count,
+                    "passed": fail_count == 0,
+                    "u": getattr(machine, "u", 0),
+                    "m_age": getattr(machine, "m_age", 0),
+                    "target_specs": target_specs,
+                }
+            )
 
             self.stats["total_processed"] += len(finished_batch)
 
@@ -222,7 +263,11 @@ class ProcessA_Env:
                 if not can_assign or len(batch) != len(task_uids):
                     continue
 
-                if assignment.get("replace_consumable", False):
+                replace_consumable = bool(assignment.get("replace_consumable", False))
+                u_before = getattr(machine, "u", 0)
+                m_age_before = getattr(machine, "m_age", 0)
+
+                if replace_consumable:
                     machine.replace_consumable()
 
                 finish_time = current_time + self.process_time
@@ -239,6 +284,12 @@ class ProcessA_Env:
                         "task_uids": task_uids,
                         "start_time": current_time,
                         "end_time": finish_time,
+                        "recipe": list(recipe),
+                        "replace_consumable": replace_consumable,
+                        "u_before": u_before,
+                        "u_after_start": getattr(machine, "u", 0),
+                        "m_age_before": m_age_before,
+                        "m_age_after_start": getattr(machine, "m_age", 0),
                         "task_type": assignment.get("task_type", "external_action"),
                     }
                 )

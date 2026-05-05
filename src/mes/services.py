@@ -60,6 +60,8 @@ class MESDecisionService:
             task_uids = [uid for uid in pool if uid not in used_uids][:batch_size]
             if not task_uids:
                 continue
+            if stage == "C" and len(task_uids) < batch_size:
+                continue
             used_uids.update(task_uids)
             candidates.append(
                 {
@@ -128,7 +130,7 @@ class MESDecisionService:
         if stage == "B":
             pool = [int(uid) for uid in stage_state.get("incoming_from_A_uids", [])] + pool
         if stage == "C":
-            pool = [int(uid) for uid in stage_state.get("incoming_from_B_uids", [])] + pool
+            pool = pool + [int(uid) for uid in stage_state.get("incoming_from_B_uids", [])]
         seen = set()
         ordered = []
         for uid in pool:
@@ -154,4 +156,3 @@ class MESDecisionService:
         except (TypeError, ValueError):
             return False
         return finish_time <= current_time
-

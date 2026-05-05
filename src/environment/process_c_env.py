@@ -41,6 +41,11 @@ class ProcessC_Env:
         self.N_pack = self.batch_size_C
         self.max_wait_time = config.get("max_wait_time", 30)
         try:
+            process_time = int(config.get("process_time_C", 0))
+        except (TypeError, ValueError):
+            process_time = 0
+        self.process_time = max(0, process_time)
+        try:
             min_queue = int(config.get("min_queue_size", self.batch_size_C))
         except (TypeError, ValueError):
             min_queue = self.batch_size_C
@@ -48,6 +53,7 @@ class ProcessC_Env:
 
         self.last_pack_time = 0
         self.pack_count = 0
+        self.next_pack_id = 0
         self.deterministic = config.get("deterministic_mode", False)
 
         self.stats = {
@@ -94,6 +100,8 @@ class ProcessC_Env:
             "single_pack_per_step": self.max_packs_per_step == 1,
             "multi_machine_active": multi_machine_active,
             "max_packs_per_step": self.max_packs_per_step,
+            "timed_processing_active": self.process_time > 0,
+            "process_time_C": self.process_time,
         }
 
     def _warn_on_semantic_mismatch(self):
@@ -108,21 +116,6 @@ class ProcessC_Env:
                 stacklevel=2,
             )
 
-        raw_process_time_c = self.config.get("process_time_C", 0)
-        try:
-            process_time_c = int(raw_process_time_c)
-        except (TypeError, ValueError):
-            process_time_c = 0
-        if process_time_c != 0:
-            warnings.warn(
-                (
-                    "ProcessC_Env: process_time_C is configured but not active in the current "
-                    "instant-pack C transition model."
-                ),
-                RuntimeWarning,
-                stacklevel=2,
-            )
-
     def reset(self):
         """Reset machines, queue, stats, and event logs."""
         self.machines = {
@@ -132,6 +125,7 @@ class ProcessC_Env:
         self.wait_pool = []
         self.completed_tasks = []
         self.pack_count = 0
+        self.next_pack_id = 0
         self.last_pack_time = 0
         self.event_log = []
         self.stats = {
@@ -203,17 +197,18 @@ class ProcessC_Env:
             )
         return requests
 
-    def _try_complete_pack(
-        self,
-        current_time: int,
-        machine_id: str,
-        task_uids: List[int],
-        reason: str,
-    ) -> List[Task]:
-        """Try to complete a single pack request and return packed tasks."""
-        if not task_uids:
-            return []
-        if len(task_uids) != len(set(task_uids)):
+    def _machine_for_id(self, machine_id: str) -> Optional[ProcessC_Machine]:
+        """Resolve a public C equipment id like `C_0` to a C machine."""
+        suffix = str(machine_id).split("_")[-1]
+        try:
+            machine_index = int(suffix)
+        except (TypeError, ValueError):
+            return None
+        return self.machines.get(machine_index)
+
+    def _select_pack_tasks(self, task_uids: List[int]) -> List[Task]:
+        """Return selected tasks from the wait pool, or an empty list if invalid."""
+        if not task_uids or len(task_uids) != len(set(task_uids)):
             return []
 
         uid_to_task = {task.uid: task for task in self.wait_pool}
@@ -223,21 +218,28 @@ class ProcessC_Env:
             if task is None:
                 return []
             selected_pack.append(task)
+        return selected_pack
 
-        print(f"\n  t={current_time}: Packing start (reason: {reason})")
-        for task in selected_pack:
-            self.wait_pool.remove(task)
-
+    def _complete_pack(
+        self,
+        current_time: int,
+        machine_id: str,
+        selected_pack: List[Task],
+        pack_id: int,
+        start_time: int,
+        reason: str,
+    ) -> List[Task]:
+        """Complete a selected pack and return finalized tasks."""
         pack_info = self._create_pack_info(selected_pack, current_time)
         for task in selected_pack:
             task.location = "COMPLETED"
-            task.pack_id = self.pack_count
+            task.pack_id = pack_id
             task.history.append(
                 {
                     "time": current_time,
                     "process": "C",
                     "status": "PACKED",
-                    "pack_id": self.pack_count,
+                    "pack_id": pack_id,
                     "pack_quality": pack_info["avg_quality"],
                     "pack_compat": pack_info["avg_compat"],
                     "wait_time": current_time - getattr(task, "arrival_time", 0),
@@ -252,9 +254,10 @@ class ProcessC_Env:
                 "process": "C",
                 "machine_id": machine_id,
                 "task_uids": [t.uid for t in selected_pack],
-                "pack_id": self.pack_count,
-                "start_time": current_time,
+                "pack_id": pack_id,
+                "start_time": start_time,
                 "end_time": current_time,
+                "reason": reason,
             }
         )
 
@@ -262,11 +265,89 @@ class ProcessC_Env:
         self.last_pack_time = current_time
         self._update_stats(pack_info)
 
-        print(f"    [OK] Pack #{self.pack_count - 1} completed!")
+        print(f"    [OK] Pack #{pack_id} completed!")
         print(f"       - Avg Quality: {pack_info['avg_quality']:.2f}")
         print(f"       - Compatibility: {pack_info['avg_compat']:.2f}")
         print(f"       - Tasks: {[t.uid for t in selected_pack]}")
         return selected_pack
+
+    def _finish_due_packs(self, current_time: int) -> List[Task]:
+        """Finish C machine packs whose scheduled end time has arrived."""
+        completed: List[Task] = []
+        for machine in self.machines.values():
+            if machine.status != "busy" or machine.finish_time > current_time:
+                continue
+            meta = getattr(machine, "current_pack_meta", {})
+            selected_pack = machine.finish_processing()
+            pack_id = int(meta.get("pack_id", self.next_pack_id))
+            start_time = int(meta.get("start_time", current_time))
+            reason = str(meta.get("reason", "scheduled_pack"))
+            machine.current_pack_meta = {}
+            completed.extend(
+                self._complete_pack(
+                    current_time=current_time,
+                    machine_id=str(machine.id),
+                    selected_pack=selected_pack,
+                    pack_id=pack_id,
+                    start_time=start_time,
+                    reason=reason,
+                )
+            )
+        return completed
+
+    def _try_start_or_complete_pack(
+        self,
+        current_time: int,
+        machine_id: str,
+        task_uids: List[int],
+        reason: str,
+    ) -> Optional[List[Task]]:
+        """Start a timed pack or complete it immediately when process_time_C is zero."""
+        machine = self._machine_for_id(machine_id)
+        if machine is None or machine.status != "idle":
+            return None
+
+        selected_pack = self._select_pack_tasks(task_uids)
+        if not selected_pack:
+            return None
+
+        print(f"\n  t={current_time}: Packing start (reason: {reason})")
+        for task in selected_pack:
+            self.wait_pool.remove(task)
+
+        pack_id = self.next_pack_id
+        self.next_pack_id += 1
+        finish_time = current_time + self.process_time
+        if self.process_time <= 0:
+            return self._complete_pack(
+                current_time=current_time,
+                machine_id=machine_id,
+                selected_pack=selected_pack,
+                pack_id=pack_id,
+                start_time=current_time,
+                reason=reason,
+            )
+
+        machine.start_processing(selected_pack, finish_time)
+        machine.current_pack_meta = {
+            "pack_id": pack_id,
+            "start_time": current_time,
+            "reason": reason,
+        }
+        self.event_log.append(
+            {
+                "timestamp": current_time,
+                "event_type": "pack_started",
+                "process": "C",
+                "machine_id": machine_id,
+                "task_uids": [t.uid for t in selected_pack],
+                "pack_id": pack_id,
+                "start_time": current_time,
+                "end_time": finish_time,
+                "reason": reason,
+            }
+        )
+        return []
 
     def step(
         self,
@@ -280,6 +361,7 @@ class ProcessC_Env:
         """
         completed_packs: List[Task] = []
         actions = actions or {}
+        completed_packs.extend(self._finish_due_packs(current_time))
 
         pack_requests = self._extract_pack_requests(actions)
         if pack_requests:
@@ -294,16 +376,16 @@ class ProcessC_Env:
                 if any(uid in used_uids for uid in task_uids):
                     continue
 
-                selected_pack = self._try_complete_pack(
+                selected_pack = self._try_start_or_complete_pack(
                     current_time=current_time,
                     machine_id=machine_id,
                     task_uids=task_uids,
                     reason=reason,
                 )
-                if not selected_pack:
+                if selected_pack is None:
                     continue
                 completed_packs.extend(selected_pack)
-                used_uids.update(task.uid for task in selected_pack)
+                used_uids.update(task_uids)
                 processed_packs += 1
 
         if self.wait_pool:
@@ -393,4 +475,7 @@ class ProcessC_Env:
             "avg_quality": self.stats["avg_quality"],
             "avg_compat": self.stats["avg_compat"],
             "avg_wait_time": self.stats["avg_wait_time"],
+            "busy_machines": sum(
+                1 for machine in self.machines.values() if machine.status == "busy"
+            ),
         }

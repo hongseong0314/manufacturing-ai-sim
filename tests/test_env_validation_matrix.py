@@ -445,23 +445,38 @@ def test_c_warns_when_num_machines_c_exceeds_single_pack_runtime():
     ), "[C-Semantics] Expected warning for num_machines_C > 1 in single-pack mode."
 
 
-def test_c_warns_when_process_time_c_is_nonzero_but_inactive():
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        ManufacturingEnv(
-            {
-                "num_machines_A": 1,
-                "num_machines_B": 1,
-                "num_machines_C": 1,
-                "process_time_C": 5,
-            }
-        )
+def test_process_c_uses_configured_timed_pack_duration():
+    env = ProcessC_Env(
+        {
+            "num_machines_C": 1,
+            "batch_size_C": 2,
+            "min_queue_size": 1,
+            "process_time_C": 2,
+        }
+    )
+    tasks = _build_tasks(2, start_uid=7200)
+    env.add_tasks(tasks, current_time=0)
 
-    messages = [str(entry.message) for entry in caught]
-    assert any(
-        "process_time_C" in message and "not active" in message
-        for message in messages
-    ), "[C-Semantics] Expected warning when nonzero process_time_C is configured."
+    started = env.step(
+        current_time=0,
+        actions={"C_0": {"task_uids": [7200, 7201], "reason": "test"}},
+    )
+    assert started["completed"] == []
+    assert env.machines[0].status == "busy"
+    assert env.machines[0].finish_time == 2
+    assert env.event_log[-1]["event_type"] == "pack_started"
+    assert env.event_log[-1]["start_time"] == 0
+    assert env.event_log[-1]["end_time"] == 2
+
+    waiting = env.step(current_time=1, actions={})
+    assert waiting["completed"] == []
+
+    finished = env.step(current_time=2, actions={})
+    assert [task.uid for task in finished["completed"]] == [7200, 7201]
+    assert env.machines[0].status == "idle"
+    assert env.event_log[-1]["event_type"] == "pack_completed"
+    assert env.event_log[-1]["start_time"] == 0
+    assert env.event_log[-1]["end_time"] == 2
 
 
 def test_decision_state_contains_c_capabilities():

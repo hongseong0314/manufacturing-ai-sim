@@ -30,9 +30,9 @@ def _build_default_env() -> ManufacturingEnv:
             "num_machines_C": 3,
             "batch_size_C": 4,
             "max_packs_per_step": 3,
-            "process_time_A": 1,
-            "process_time_B": 1,
-            "process_time_C": 0,
+            "process_time_A": 20,
+            "process_time_B": 5,
+            "process_time_C": 2,
             "deterministic_mode": True,
         }
     )
@@ -177,7 +177,7 @@ def _reserve_assignment_in_state(
         reserved_machine = dict(machine_state)
         current_time = int(cloned.get("time", 0) or 0)
         reserved_machine["status"] = "busy"
-        reserved_machine["finish_time"] = current_time + 1
+        reserved_machine["finish_time"] = current_time + _stage_process_time(stage)
         reserved_machine["current_batch_uids"] = task_uids
         machines[machine_key] = reserved_machine
 
@@ -324,10 +324,12 @@ def _stage_summary(stage: str, decision_state: Dict[str, Any]) -> Dict[str, Any]
     machines = []
     running = 0
     idle = 0
+    running_wip = 0
     for equipment_id, machine in sorted(stage_state.get("machines", {}).items()):
         status = str(machine.get("status", "UNKNOWN")).upper()
         if status == "BUSY":
             running += 1
+            running_wip += len(machine.get("current_batch_uids", []) or [])
         if status == "IDLE":
             idle += 1
         machines.append(
@@ -354,7 +356,8 @@ def _stage_summary(stage: str, decision_state: Dict[str, Any]) -> Dict[str, Any]
         "rework": rework,
         "running": running,
         "idle": idle,
-        "total_wip": wait + rework + incoming,
+        "running_wip": running_wip,
+        "total_wip": wait + rework + incoming + running_wip,
         "status": "RUN" if running else "READY",
         "focus": bool(context.harness.service.dispatch_candidates(decision_state, stage)),
         "machines": machines,
@@ -479,6 +482,564 @@ def _live_fab_state() -> Dict[str, Any]:
         "active_chain": _decision_chain(correlation_id),
         "recent_events": [event.to_dict() for event in recent_events],
         "last_cycle": context.last_cycle,
+    }
+
+
+def _stage_env(stage: str) -> Any:
+    return {"A": context.env.env_A, "B": context.env.env_B, "C": context.env.env_C}[stage]
+
+
+def _stage_from_equipment_id(equipment_id: str) -> str:
+    stage = str(equipment_id or "").split("_", 1)[0].upper()
+    if stage not in STAGES:
+        raise HTTPException(status_code=404, detail=f"unknown equipment: {equipment_id}")
+    return stage
+
+
+def _canonical_equipment_id(equipment_id: str) -> str:
+    raw = str(equipment_id or "").strip()
+    stage = _stage_from_equipment_id(raw)
+    suffix = raw.split("_", 1)[1] if "_" in raw else raw[1:]
+    return f"{stage}_{suffix}" if suffix else raw.upper()
+
+
+def _recipe_label(stage: str, recipe: List[Any]) -> str:
+    names = {
+        "A": ("pressure", "speed", "dwell"),
+        "B": ("clean", "rinse", "dry"),
+    }.get(stage, tuple(f"p{i + 1}" for i in range(len(recipe))))
+    return ", ".join(
+        f"{name}={value:g}" if isinstance(value, (int, float)) else f"{name}={value}"
+        for name, value in zip(names, recipe)
+    )
+
+
+def _target_window(target_specs: List[Dict[str, Any]]) -> Optional[List[float]]:
+    lows: List[float] = []
+    highs: List[float] = []
+    for spec in target_specs or []:
+        try:
+            lows.append(float(spec["low"]))
+            highs.append(float(spec["high"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not lows or not highs:
+        return None
+    return [
+        round(sum(lows) / len(lows), 3),
+        round(sum(highs) / len(highs), 3),
+    ]
+
+
+def _machine_material_state(stage: str, source: Dict[str, Any]) -> Dict[str, Any]:
+    if stage == "A":
+        primary_key = "u"
+        secondary_key = "m_age"
+        primary_value = source.get("u", source.get("u_after_start", 0))
+        secondary_value = source.get("m_age", source.get("m_age_after_start", 0))
+        primary_label = "Consumable use"
+        secondary_label = "Machine age"
+    else:
+        primary_key = "v"
+        secondary_key = "b_age"
+        primary_value = source.get("v", source.get("v_after_start", 0))
+        secondary_value = source.get("b_age", source.get("b_age_after_start", 0))
+        primary_label = "Solution use"
+        secondary_label = "Bath age"
+    try:
+        primary_value = int(primary_value)
+    except (TypeError, ValueError):
+        primary_value = 0
+    try:
+        secondary_value = int(secondary_value)
+    except (TypeError, ValueError):
+        secondary_value = 0
+    return {
+        "primary_key": primary_key,
+        "primary_label": primary_label,
+        "primary_value": primary_value,
+        "secondary_key": secondary_key,
+        "secondary_label": secondary_label,
+        "secondary_value": secondary_value,
+        "state_label": f"{primary_key}={primary_value} / {secondary_key}={secondary_value}",
+    }
+
+
+def _machine_quality_series(stage: str, equipment_id: str) -> List[Dict[str, Any]]:
+    series: List[Dict[str, Any]] = []
+    env = _stage_env(stage)
+    for index, event in enumerate(getattr(env, "event_log", []) or []):
+        if str(event.get("event_type", "")) != "task_completed":
+            continue
+        if str(event.get("machine_id", "")) != equipment_id:
+            continue
+
+        raw_values = event.get("quality_values") or []
+        quality_values: List[float] = []
+        for raw_value in raw_values:
+            try:
+                quality_values.append(round(float(raw_value), 4))
+            except (TypeError, ValueError):
+                continue
+        if event.get("avg_quality") is not None:
+            try:
+                quality = round(float(event["avg_quality"]), 4)
+            except (TypeError, ValueError):
+                quality = None
+        else:
+            quality = (
+                round(sum(quality_values) / len(quality_values), 4)
+                if quality_values
+                else None
+            )
+        if quality is None:
+            continue
+
+        task_uids = [int(uid) for uid in event.get("task_uids", [])]
+        recipe = list(event.get("recipe") or [])
+        target_window = _target_window(event.get("target_specs", []))
+        series.append(
+            {
+                "point_id": f"{equipment_id}-{event.get('timestamp', 0)}-{index}",
+                "time": int(event.get("timestamp", event.get("end_time", 0)) or 0),
+                "step": int(event.get("timestamp", event.get("end_time", 0)) or 0),
+                "stage": stage,
+                "equipment_id": equipment_id,
+                "task_uids": task_uids,
+                "task_codes": [_task_code(uid) for uid in task_uids],
+                "quality": quality,
+                "quality_values": quality_values,
+                "recipe": recipe,
+                "recipe_label": _recipe_label(stage, recipe),
+                "material_state": _machine_material_state(stage, event),
+                "target_window": target_window,
+                "pass_count": int(event.get("pass_count", 0) or 0),
+                "fail_count": int(event.get("fail_count", 0) or 0),
+                "passed": bool(event.get("passed", False)),
+                "event_type": "task_completed",
+            }
+        )
+    return sorted(series, key=lambda point: (point["time"], point["point_id"]))
+
+
+def _machine_recent_assignments(stage: str, equipment_id: str) -> List[Dict[str, Any]]:
+    env = _stage_env(stage)
+    assignments: List[Dict[str, Any]] = []
+    for event in getattr(env, "event_log", []) or []:
+        if str(event.get("event_type", "")) != "task_assigned":
+            continue
+        if str(event.get("machine_id", "")) != equipment_id:
+            continue
+        task_uids = [int(uid) for uid in event.get("task_uids", [])]
+        recipe = list(event.get("recipe") or [])
+        assignments.append(
+            {
+                "time": int(event.get("timestamp", event.get("start_time", 0)) or 0),
+                "start": int(event.get("start_time", event.get("timestamp", 0)) or 0),
+                "end": int(event.get("end_time", 0) or 0),
+                "task_uids": task_uids,
+                "task_codes": [_task_code(uid) for uid in task_uids],
+                "task_type": event.get("task_type", "external_action"),
+                "recipe": recipe,
+                "recipe_label": _recipe_label(stage, recipe),
+                "material_state": _machine_material_state(stage, event),
+            }
+        )
+    return sorted(assignments, key=lambda item: item["time"], reverse=True)[:8]
+
+
+def _quality_kpis(series: List[Dict[str, Any]], machine_state: Dict[str, Any]) -> Dict[str, Any]:
+    processed = sum(len(point.get("task_uids", [])) for point in series)
+    passed = sum(int(point.get("pass_count", 0) or 0) for point in series)
+    failed = sum(int(point.get("fail_count", 0) or 0) for point in series)
+    samples = [
+        float(value)
+        for point in series
+        for value in point.get("quality_values", [])
+    ]
+    avg_quality = round(sum(samples) / len(samples), 3) if samples else None
+    latest_quality = series[-1]["quality"] if series else None
+    yield_rate = round(passed / processed, 4) if processed else 1.0
+    return {
+        "processed": processed,
+        "passed": passed,
+        "failed": failed,
+        "yield_rate": yield_rate,
+        "avg_quality": avg_quality,
+        "latest_quality": latest_quality,
+        "active_wip": len(machine_state.get("current_batch_uids", []) or []),
+        "sample_count": len(samples),
+    }
+
+
+def _equipment_detail(equipment_id: str) -> Dict[str, Any]:
+    canonical_id = _canonical_equipment_id(equipment_id)
+    stage = _stage_from_equipment_id(canonical_id)
+    if stage not in {"A", "B"}:
+        raise HTTPException(
+            status_code=400,
+            detail="machine quality detail is available for APC stages A and B",
+        )
+
+    decision_state = context.env.get_decision_state()
+    machine_state = decision_state.get(stage, {}).get("machines", {}).get(canonical_id)
+    if machine_state is None:
+        raise HTTPException(status_code=404, detail=f"unknown equipment: {equipment_id}")
+
+    series = _machine_quality_series(stage, canonical_id)
+    process_label = {
+        "A": "Machining APC / Process QA",
+        "B": "Cleaning APC / Clean QA",
+    }[stage]
+    recipe_parameters = {
+        "A": ["pressure", "speed", "dwell"],
+        "B": ["clean", "rinse", "dry"],
+    }[stage]
+    return {
+        "time": decision_state.get("time", 0),
+        "equipment_id": canonical_id,
+        "stage": stage,
+        "process_label": process_label,
+        "status": str(machine_state.get("status", "UNKNOWN")).upper(),
+        "batch_size": machine_state.get("batch_size"),
+        "current_batch_uids": list(machine_state.get("current_batch_uids", [])),
+        "finish_time": machine_state.get("finish_time"),
+        "material_state": _machine_material_state(stage, machine_state),
+        "apc": {
+            "goal": "Control recipe settings toward the product quality window",
+            "quality_axis": {"x": "step", "y": "quality_value"},
+            "aggregation": "batch average when multiple samples finish together",
+            "recipe_parameters": recipe_parameters,
+        },
+        "kpis": _quality_kpis(series, machine_state),
+        "quality_series": series,
+        "recent_assignments": _machine_recent_assignments(stage, canonical_id),
+    }
+
+
+def _stage_process_time(stage: str) -> int:
+    key = f"process_time_{stage}"
+    try:
+        duration = int(context.env.config.get(key, 1))
+    except (TypeError, ValueError):
+        duration = 1
+    return max(1, duration)
+
+
+def _flow_summary(decision_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    labels = {
+        "A": "Process QA",
+        "B": "Clean QA",
+        "C": "Packing",
+    }
+    summaries = []
+    for stage in STAGES:
+        stage_summary = _stage_summary(stage, decision_state)
+        equipment_count = len(stage_summary["machines"])
+        running = int(stage_summary["running"])
+        stats = getattr(_stage_env(stage), "stats", {})
+        summaries.append(
+            {
+                "stage": stage,
+                "label": labels[stage],
+                "equipment_count": equipment_count,
+                "running": running,
+                "idle": int(stage_summary["idle"]),
+                "utilization": running / equipment_count if equipment_count else 0.0,
+                "wip": int(stage_summary["total_wip"]),
+                "wait": int(stage_summary["wait"]),
+                "incoming": int(stage_summary["incoming"]),
+                "rework": int(stage_summary["rework"]),
+                "processed": int(stats.get("total_processed", 0)),
+                "passed": int(stats.get("total_passed", 0)),
+                "reworked": int(stats.get("total_reworked", 0)),
+                "completed": int(stats.get("total_tasks_packed", 0))
+                if stage == "C"
+                else int(stats.get("total_passed", 0)),
+                "status": stage_summary["status"],
+                "focus": bool(stage_summary["focus"]),
+            }
+        )
+    return summaries
+
+
+def _bar_status(start: int, end: int, now: int) -> str:
+    if now >= end:
+        return "completed"
+    if start <= now < end:
+        return "active"
+    return "planned"
+
+
+def _task_code(uid: Any) -> str:
+    try:
+        return f"T{int(uid)}"
+    except (TypeError, ValueError):
+        return f"T{uid}"
+
+
+def _task_label(task_uids: List[int], max_items: int = 3) -> str:
+    if not task_uids:
+        return "-"
+    shown = [_task_code(uid) for uid in task_uids[:max_items]]
+    if len(task_uids) > max_items:
+        shown.append(f"+{len(task_uids) - max_items}")
+    return ",".join(shown)
+
+
+def _stacked_task_bars(
+    *,
+    stage: str,
+    machine_id: str,
+    task_uids: List[int],
+    start: int,
+    end: int,
+    status: str,
+    event_type: str,
+    task_type: str,
+    source: str,
+    bar_id_prefix: str,
+    label_prefix: str = "",
+    batch_id: Optional[Any] = None,
+) -> List[Dict[str, Any]]:
+    """Build one visual sub-bar per task so batch work is readable."""
+    if not task_uids:
+        task_uids = []
+    stack_size = max(1, len(task_uids))
+    rows = []
+    iterable = task_uids or [None]
+    for stack_index, uid in enumerate(iterable):
+        visible_uids = [int(uid)] if uid is not None else []
+        task_text = _task_label(visible_uids)
+        label = f"{label_prefix} {task_text}".strip() if label_prefix else task_text
+        rows.append(
+            {
+                "bar_id": f"{bar_id_prefix}-{uid if uid is not None else stack_index}",
+                "stage": stage,
+                "machine_id": machine_id,
+                "row_id": f"{stage}:{machine_id}",
+                "task_uids": visible_uids,
+                "batch_task_uids": task_uids,
+                "batch_id": batch_id,
+                "start": start,
+                "end": end,
+                "duration": end - start,
+                "status": status,
+                "event_type": event_type,
+                "task_type": task_type,
+                "label": label,
+                "source": source,
+                "stack_index": stack_index,
+                "stack_size": stack_size,
+            }
+        )
+    return rows
+
+
+def _event_to_gantt_bars(stage: str, now: int) -> List[Dict[str, Any]]:
+    bars: List[Dict[str, Any]] = []
+    started_pack_ids = {
+        event.get("pack_id")
+        for event in getattr(_stage_env(stage), "event_log", []) or []
+        if str(event.get("event_type", "")) == "pack_started"
+    }
+    for index, event in enumerate(getattr(_stage_env(stage), "event_log", []) or []):
+        event_type = str(event.get("event_type", ""))
+        if event_type == "task_assigned":
+            start = int(event.get("start_time", event.get("timestamp", 0)) or 0)
+            end = int(event.get("end_time", start + _stage_process_time(stage)) or start)
+            end = max(start + 1, end)
+            machine_id = str(event.get("machine_id", f"{stage}_0"))
+            task_uids = [int(uid) for uid in event.get("task_uids", [])]
+            task_type = str(event.get("task_type", "new"))
+            status = _bar_status(start, end, now)
+            if task_type == "rework":
+                status = "rework_active" if status == "active" else "rework"
+            bars.append(
+                {
+                    "bar_id": f"{stage}-{machine_id}-{start}-{index}",
+                    "stage": stage,
+                    "machine_id": machine_id,
+                    "row_id": f"{stage}:{machine_id}",
+                    "task_uids": task_uids,
+                    "start": start,
+                    "end": end,
+                    "duration": end - start,
+                    "status": status,
+                    "event_type": event_type,
+                    "task_type": task_type,
+                    "label": _task_label(task_uids),
+                    "source": "event_log",
+                    "stack_index": 0,
+                    "stack_size": 1,
+                }
+            )
+        elif event_type in {"pack_started", "pack_completed"}:
+            if event_type == "pack_completed" and event.get("pack_id") in started_pack_ids:
+                continue
+            start = int(event.get("start_time", event.get("timestamp", 0)) or 0)
+            raw_end = int(event.get("end_time", start) or start)
+            end = max(start + _stage_process_time("C"), raw_end)
+            machine_id = str(event.get("machine_id", "C_0"))
+            task_uids = [int(uid) for uid in event.get("task_uids", [])]
+            pack_id = event.get("pack_id", index)
+            status = _bar_status(start, end, now)
+            bars.extend(
+                _stacked_task_bars(
+                    stage=stage,
+                    machine_id=machine_id,
+                    task_uids=task_uids,
+                    start=start,
+                    end=end,
+                    status=status,
+                    event_type=event_type,
+                    task_type="pack",
+                    source="event_log",
+                    bar_id_prefix=f"{stage}-{machine_id}-pack-{pack_id}",
+                    label_prefix=f"P{pack_id}",
+                    batch_id=pack_id,
+                )
+            )
+    return bars
+
+
+def _planned_gantt_bars(decision_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    now = int(decision_state.get("time", 0) or 0)
+    bars: List[Dict[str, Any]] = []
+    for stage in STAGES:
+        for index, candidate in enumerate(
+            context.harness.service.dispatch_candidates(decision_state, stage=stage)
+        ):
+            machine_id = str(candidate.get("equipment_id", f"{stage}_{index}"))
+            task_uids = [int(uid) for uid in candidate.get("task_uids", [])]
+            end = now + _stage_process_time(stage)
+            task_type = str(candidate.get("task_type", "new"))
+            bars.extend(
+                _stacked_task_bars(
+                    stage=stage,
+                    machine_id=machine_id,
+                    task_uids=task_uids,
+                    start=now,
+                    end=end,
+                    status="planned_rework" if task_type == "rework" else "planned",
+                    event_type="next_dispatch_candidate",
+                    task_type=task_type,
+                    source="dispatch_candidate",
+                    bar_id_prefix=f"planned-{stage}-{machine_id}-{index}",
+                    label_prefix="Next",
+                )
+            )
+    return bars
+
+
+def _gantt_rows(decision_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    rows = []
+    for stage in STAGES:
+        machines = decision_state.get(stage, {}).get("machines", {})
+        for equipment_id in sorted(machines):
+            rows.append(
+                {
+                    "row_id": f"{stage}:{equipment_id}",
+                    "stage": stage,
+                    "machine_id": str(equipment_id),
+                    "label": str(equipment_id),
+                    "display_stage": stage,
+                    "row_type": "equipment",
+                }
+            )
+    return rows
+
+
+def _gantt_horizon(
+    now: int,
+    lookback: int = 36,
+    lookahead: int = 12,
+) -> Dict[str, Any]:
+    lookback = max(6, min(240, int(lookback)))
+    lookahead = max(4, min(120, int(lookahead)))
+    start = max(0, now - lookback)
+    end = max(now + lookahead, start + 12)
+    span = max(1, end - start)
+    target_ticks = 10
+    step = max(1, round(span / target_ticks))
+    ticks = list(range(start, end + 1, step))
+    if ticks[-1] != end:
+        ticks.append(end)
+    return {
+        "start": start,
+        "end": end,
+        "span": span,
+        "ticks": ticks,
+        "lookback": lookback,
+        "lookahead": lookahead,
+    }
+
+
+def _filter_bars_for_horizon(
+    bars: List[Dict[str, Any]],
+    horizon: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    start = int(horizon["start"])
+    end = int(horizon["end"])
+    return [
+        bar
+        for bar in bars
+        if int(bar["end"]) >= start and int(bar["start"]) <= end
+    ]
+
+
+def _stage_gantt_view(
+    stage: str,
+    rows: List[Dict[str, Any]],
+    bars: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    stage_rows = [row for row in rows if row["stage"] == stage]
+    stage_bars = [bar for bar in bars if bar["stage"] == stage]
+    by_machine: Dict[str, List[Dict[str, Any]]] = {}
+    for bar in stage_bars:
+        by_machine.setdefault(bar["machine_id"], []).append(bar)
+    for items in by_machine.values():
+        items.sort(key=lambda item: (item["start"], item["end"], item["bar_id"]))
+    return {
+        "stage": stage,
+        "rows": stage_rows,
+        "bars": stage_bars,
+        "machine_schedule": by_machine,
+        "bar_count": len(stage_bars),
+    }
+
+
+def _gantt_state(lookback: int = 36, lookahead: int = 12) -> Dict[str, Any]:
+    decision_state = context.env.get_decision_state()
+    now = int(decision_state.get("time", 0) or 0)
+    bars: List[Dict[str, Any]] = []
+    for stage in STAGES:
+        bars.extend(_event_to_gantt_bars(stage, now))
+    bars.extend(_planned_gantt_bars(decision_state))
+    rows = _gantt_rows(decision_state)
+    horizon = _gantt_horizon(now, lookback=lookback, lookahead=lookahead)
+    visible_bars = _filter_bars_for_horizon(bars, horizon)
+    return {
+        "time": now,
+        "horizon": horizon,
+        "flow": _flow_summary(decision_state),
+        "rows": rows,
+        "bars": sorted(
+            visible_bars,
+            key=lambda bar: (bar["stage"], bar["machine_id"], bar["start"], bar["end"]),
+        ),
+        "total_bar_count": len(bars),
+        "visible_bar_count": len(visible_bars),
+        "stage_views": {
+            stage: _stage_gantt_view(stage, rows, visible_bars)
+            for stage in STAGES
+        },
+        "legend": {
+            "active": "Running now",
+            "completed": "Finished",
+            "planned": "Next eligible dispatch",
+            "rework": "Rework processing",
+        },
     }
 
 
@@ -657,6 +1218,19 @@ def run_until(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str,
 @app.get("/api/v2/decision-chain/{correlation_id}")
 def decision_chain(correlation_id: str) -> Dict[str, Any]:
     return _decision_chain(correlation_id)
+
+
+@app.get("/api/v2/equipment/{equipment_id}/detail")
+def equipment_detail(equipment_id: str) -> Dict[str, Any]:
+    return _equipment_detail(equipment_id)
+
+
+@app.get("/api/v2/gantt")
+def gantt(
+    lookback: int = Query(36, ge=6, le=240),
+    lookahead: int = Query(12, ge=4, le=120),
+) -> Dict[str, Any]:
+    return _gantt_state(lookback=lookback, lookahead=lookahead)
 
 
 @app.post("/api/v2/simulation/reset")

@@ -10,6 +10,7 @@ schema.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
@@ -37,6 +38,7 @@ class SQLiteMESStore(InMemoryMESStore):
 
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
+        self.cache_limit = int(os.environ.get("MES_STORE_CACHE_LIMIT", "5000"))
         if str(self.db_path) != ":memory:":
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
@@ -126,21 +128,42 @@ class SQLiteMESStore(InMemoryMESStore):
         self._conn.commit()
 
     def _load_cache(self) -> None:
-        for payload in self._rows("feature_snapshots"):
+        for payload in self._rows("feature_snapshots", limit=self.cache_limit):
             snapshot = FeatureSnapshot(**payload)
             self._feature_snapshots[snapshot.feature_snapshot_id] = snapshot
-        for payload in self._rows("recommendations"):
+        for payload in self._rows("recommendations", limit=self.cache_limit):
             recommendation = AIRecommendation(**payload)
             self._recommendations[recommendation.recommendation_id] = recommendation
-        for payload in self._rows("validations"):
+        for payload in self._rows("validations", limit=self.cache_limit):
             self._validations.append(RuleValidationResult(**payload))
-        for payload in self._rows("commands"):
+        for payload in self._rows("commands", limit=self.cache_limit):
             command = MESCommand(**payload)
             self._commands[command.command_id] = command
-        for payload in self._rows("events"):
+        for payload in self._rows("events", limit=self.cache_limit):
             self._events.append(Event(**payload))
 
-    def _rows(self, table: str) -> Iterable[Dict[str, Any]]:
+    def _rows(
+        self,
+        table: str,
+        limit: Optional[int] = None,
+    ) -> Iterable[Dict[str, Any]]:
+        if limit is not None and limit > 0:
+            rows = self._conn.execute(
+                f"""
+                SELECT payload FROM (
+                    SELECT row_id, payload
+                    FROM {table}
+                    ORDER BY row_id DESC
+                    LIMIT ?
+                )
+                ORDER BY row_id ASC
+                """,
+                (int(limit),),
+            ).fetchall()
+            for row in rows:
+                yield json.loads(row["payload"])
+            return
+
         rows = self._conn.execute(
             f"SELECT payload FROM {table} ORDER BY row_id ASC"
         ).fetchall()
@@ -187,4 +210,3 @@ class SQLiteMESStore(InMemoryMESStore):
             (record_id, correlation_id, json.dumps(payload, sort_keys=True)),
         )
         self._conn.commit()
-

@@ -142,3 +142,30 @@ def test_v2_run_until_stops_with_max_cycles_or_conditions():
     assert body['count'] <= 2
     assert body['stop_reason'] in ('max_cycles', 'rejected', 'no_candidates')
     assert len(body['cycles']) == body['count']
+
+
+def test_v2_equipment_detail_exposes_a_b_quality_trends():
+    client.post(
+        '/api/v2/simulation/autoplay/start',
+        json={'target_stage': 'AUTO', 'generate_every': 20, 'bootstrap_cycles': 0},
+    )
+    client.get('/api/v2/simulation/autoplay/status?step_cycles=70')
+
+    for equipment_id, stage in (('A_0', 'A'), ('B_0', 'B')):
+        r = client.get(f'/api/v2/equipment/{equipment_id}/detail')
+        assert r.status_code == 200
+        body = r.json()
+        assert body['equipment_id'] == equipment_id
+        assert body['stage'] == stage
+        assert body['process_label']
+        assert body['kpis']['processed'] > 0
+        assert 0.0 <= body['kpis']['yield_rate'] <= 1.0
+        assert body['quality_series']
+
+        point = body['quality_series'][0]
+        assert point['time'] >= 0
+        assert point['quality'] > 0
+        assert point['task_uids']
+        assert point['recipe']
+        assert point['material_state']['primary_key'] in ('u', 'v')
+        assert 'target_window' in point

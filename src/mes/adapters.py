@@ -196,11 +196,18 @@ class SimulatorMESAdapter:
             wait = len(stage_state.get("wait_pool_uids", []))
             rework = len(stage_state.get("rework_pool_uids", []))
             incoming = len(stage_state.get(f"incoming_from_{self._upstream(stage)}_uids", []))
+            running = sum(
+                len(machine.get("current_batch_uids", []) or [])
+                for machine in stage_state.get("machines", {}).values()
+                if isinstance(machine, dict)
+                and str(machine.get("status", "")).lower() == "busy"
+            )
             wip[stage] = {
                 "wait": wait,
                 "rework": rework,
                 "incoming": incoming,
-                "total": wait + rework + incoming,
+                "running": running,
+                "total": wait + rework + incoming + running,
             }
         return wip
 
@@ -259,4 +266,3 @@ class SimulatorMESAdapter:
 
     def _upstream(self, stage: str) -> str:
         return {"A": "", "B": "A", "C": "B"}.get(stage, "")
-

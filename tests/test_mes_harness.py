@@ -1,5 +1,6 @@
 from src.environment.manufacturing_env import ManufacturingEnv
 from src.mes import MESDevelopmentHarness, MESEvaluatorAgent
+from src.objects import Task
 
 
 def _build_env():
@@ -20,6 +21,71 @@ def _build_env():
 
 def _by_layer(recommendations):
     return {rec.layer_id: rec for rec in recommendations}
+
+
+def _build_c_group_env():
+    env = ManufacturingEnv(
+        {
+            "num_machines_A": 1,
+            "num_machines_B": 1,
+            "num_machines_C": 1,
+            "batch_size_C": 2,
+            "process_time_A": 1,
+            "process_time_B": 1,
+            "process_time_C": 0,
+            "deterministic_mode": True,
+        }
+    )
+    env.reset(seed_initial_tasks=False, seed=17)
+    env.time = 50
+    tasks = [
+        Task(
+            uid=100,
+            job_id="ALPHA_LOT_100",
+            customer_id="ALPHA",
+            material_type="plastic",
+            color="red",
+            due_date=45,
+            spec_a=(45.0, 55.0),
+            realized_qa_B=45.0,
+            margin_value=0.4,
+        ),
+        Task(
+            uid=101,
+            job_id="ALPHA_LOT_101",
+            customer_id="ALPHA",
+            material_type="plastic",
+            color="red",
+            due_date=46,
+            spec_a=(45.0, 55.0),
+            realized_qa_B=46.0,
+            margin_value=0.4,
+        ),
+        Task(
+            uid=200,
+            job_id="BETA_LOT_200",
+            customer_id="BETA",
+            material_type="metal",
+            color="blue",
+            due_date=200,
+            spec_a=(45.0, 55.0),
+            realized_qa_B=90.0,
+            margin_value=0.9,
+        ),
+        Task(
+            uid=201,
+            job_id="BETA_LOT_201",
+            customer_id="BETA",
+            material_type="metal",
+            color="blue",
+            due_date=201,
+            spec_a=(45.0, 55.0),
+            realized_qa_B=91.0,
+            margin_value=0.9,
+        ),
+    ]
+    env.env_C.add_tasks(tasks, current_time=0)
+    return env
 
 
 def test_development_harness_runs_connected_l4_l3_l1_l2_chain():
@@ -234,6 +300,80 @@ def test_l2_recipe_composes_apc_fields_for_rule_engine_command():
 
     command = result.generated.validation.validated_command
     assert "recipe" in command
+
+
+def test_c_packing_l3_selects_due_customer_from_l1_candidate_portfolio():
+    env = _build_c_group_env()
+    harness = MESDevelopmentHarness()
+
+    result = harness.run(env.get_decision_state(), target_stage="C")
+
+    assert result.passed
+    by_layer = _by_layer(result.recommendations)
+    l3 = by_layer["L3"]
+    l1 = by_layer["L1"]
+    l2 = by_layer["L2"]
+
+    customer_scores = {
+        candidate["group_key"]["customer_id"]: candidate["local_score"]
+        for candidate in l3.candidate_actions
+    }
+    assert customer_scores["BETA"] > customer_scores["ALPHA"]
+    assert l3.recommended_action["selected_group_key"]["customer_id"] == "ALPHA"
+    assert l3.recommended_action["selected_candidate_id"] == l1.recommended_action["candidate_id"]
+    assert l1.recommended_action["group_key"]["customer_id"] == "ALPHA"
+    assert l2.recommended_action["candidate_id"] == l1.recommended_action["candidate_id"]
+    assert result.command is not None
+    assert (
+        result.command.validated_command["dispatch_recommendation_id"]
+        == l1.recommendation_id
+    )
+
+
+def test_l3_c_packing_candidates_include_l2_annotations_before_selection():
+    env = _build_c_group_env()
+    harness = MESDevelopmentHarness()
+
+    result = harness.run(env.get_decision_state(), target_stage="C")
+
+    assert result.passed
+    by_layer = _by_layer(result.recommendations)
+    l3 = by_layer["L3"]
+    l1 = by_layer["L1"]
+    l2 = by_layer["L2"]
+
+    assert len(l3.candidate_actions) >= 2
+    for candidate in l3.candidate_actions:
+        annotation = candidate["l2_annotation"]
+        assert annotation["candidate_id"] == candidate["candidate_id"]
+        assert annotation["stage"] == "C"
+        assert "pack_quality_prediction" in annotation
+        assert "compatibility" in annotation
+        assert annotation["quality_risk"] in {"LOW", "MEDIUM", "HIGH"}
+
+    l1_candidate_ids = {
+        candidate["candidate_id"] for candidate in l1.candidate_actions
+    }
+    l2_candidate_ids = {
+        annotation["candidate_id"] for annotation in l2.candidate_actions
+    }
+    assert l1_candidate_ids <= l2_candidate_ids
+    assert l2.recommended_action["candidate_id"] == l1.recommended_action["candidate_id"]
+
+
+def test_rule_engine_rejects_l3_l1_selected_candidate_mismatch():
+    env = _build_c_group_env()
+    harness = MESDevelopmentHarness()
+    state = env.get_decision_state()
+
+    result = harness.run(state, target_stage="C")
+    by_layer = _by_layer(result.recommendations)
+    by_layer["L1"].recommended_action["candidate_id"] = "CAND_C_BROKEN"
+
+    validation = harness.service.validate_recommendations(state, result.recommendations)
+
+    assert not validation.passed
+    assert "L3_L1_CANDIDATE_MISMATCH" in validation.reasons
 
 
 def test_planner_time_trigger_reuses_objective_between_intervals():

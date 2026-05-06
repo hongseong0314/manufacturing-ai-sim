@@ -1,5 +1,8 @@
 # DESIGN.md
 
+Canonical UI source: `docs/ai-mes/06_UI_CONTROL_ROOM_SPEC.md`.
+This file keeps root-level visual rules for quick reference.
+
 ## 1. Visual Theme & Atmosphere
 
 This project is a simulator-backed semiconductor AI MES. The UI must feel like
@@ -229,4 +232,3 @@ Primary screen names:
 - Equipment and Recipe Monitor
 - Event and Genealogy Audit
 - Evaluator Console
-

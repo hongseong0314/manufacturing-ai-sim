@@ -40,6 +40,7 @@ class MESRuleEngine:
                 reasons=["MISSING_L1_DISPATCH_RECOMMENDATION"],
             )
 
+        stage_rec = self._find_recommendation(envelopes, {"STAGE_PRIORITY"}, "L3")
         recipe_rec = self._find_recommendation(
             envelopes,
             {"RECIPE", "MAINTENANCE"},
@@ -57,6 +58,13 @@ class MESRuleEngine:
             reasons.append("MISSING_EQUIPMENT_ID")
         if not task_uids:
             reasons.append("MISSING_TASK_UIDS")
+        self._check_candidate_consistency(
+            stage_rec=stage_rec,
+            dispatch_rec=dispatch_rec,
+            recipe_rec=recipe_rec,
+            action=action,
+            reasons=reasons,
+        )
 
         stage_state = decision_state.get(stage, {}) if stage else {}
         machine_state = self._find_machine(stage_state, equipment_id)
@@ -86,6 +94,10 @@ class MESRuleEngine:
             "task_type": action.get("task_type", "new"),
             "dispatch_recommendation_id": dispatch_rec.get("recommendation_id"),
         }
+        if action.get("candidate_id"):
+            command["candidate_id"] = action.get("candidate_id")
+        if action.get("reason"):
+            command["reason"] = action.get("reason")
         if recipe_rec is not None:
             command["recipe_recommendation_id"] = recipe_rec.get("recommendation_id")
             command.update(self._recipe_command_fields(recipe_rec))
@@ -115,6 +127,50 @@ class MESRuleEngine:
             if rec_type in recommendation_types and rec_layer == layer_id:
                 return rec
         return None
+
+    def _check_candidate_consistency(
+        self,
+        stage_rec: Optional[Dict[str, Any]],
+        dispatch_rec: Dict[str, Any],
+        recipe_rec: Optional[Dict[str, Any]],
+        action: Dict[str, Any],
+        reasons: List[str],
+    ) -> None:
+        candidate_id = action.get("candidate_id")
+        if candidate_id:
+            portfolio_ids = {
+                candidate.get("candidate_id")
+                for candidate in dispatch_rec.get("candidate_actions", [])
+                if isinstance(candidate, dict)
+            }
+            if portfolio_ids and candidate_id not in portfolio_ids:
+                reasons.append("L1_SELECTED_CANDIDATE_NOT_IN_PORTFOLIO")
+
+        if stage_rec is not None:
+            stage_action = dict(stage_rec.get("recommended_action") or {})
+            selected_candidate_id = stage_action.get("selected_candidate_id")
+            if selected_candidate_id and candidate_id and selected_candidate_id != candidate_id:
+                reasons.append("L3_L1_CANDIDATE_MISMATCH")
+
+            selected_stage = stage_action.get("selected_stage") or stage_action.get(
+                "target_stage"
+            )
+            if selected_stage and action.get("stage") and selected_stage != action.get("stage"):
+                reasons.append("L3_L1_STAGE_MISMATCH")
+
+            selected_group = stage_action.get("selected_group_key")
+            action_group = action.get("group_key")
+            if isinstance(selected_group, dict) and isinstance(action_group, dict):
+                for key, value in selected_group.items():
+                    if action_group.get(key) != value:
+                        reasons.append("L3_L1_GROUP_MISMATCH")
+                        break
+
+        if recipe_rec is not None:
+            recipe_action = dict(recipe_rec.get("recommended_action") or {})
+            recipe_candidate_id = recipe_action.get("candidate_id")
+            if recipe_candidate_id and candidate_id and recipe_candidate_id != candidate_id:
+                reasons.append("L2_L1_CANDIDATE_MISMATCH")
 
     def _find_machine(
         self,
@@ -185,4 +241,3 @@ class MESRuleEngine:
         if "replace_solution" in action:
             fields["replace_solution"] = bool(action["replace_solution"])
         return fields
-

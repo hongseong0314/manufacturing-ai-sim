@@ -50,8 +50,25 @@ scheduling, and machine-level APC quality behavior.
 
 ## Next Checklist
 
-- [ ] Add persistent database-backed runtime state beyond audit records:
+- [x] Add persistent database-backed runtime state beyond audit records:
   lots, wafers, equipment, recipes, events, recommendations, commands.
+- [x] Consolidate canonical AI MES, MES runtime, API, and UI documentation under
+  `docs/ai-mes/`.
+- [ ] Replace the current linear harness decision flow with the documented
+  candidate-portfolio flow:
+  - [x] Generate L1 candidate portfolios before L3 selection.
+  - [x] Add C packing candidates grouped by customer/product/material.
+  - [x] Let L3 select `selected_candidate_id` and `selected_group_key` from the
+        portfolio using L4 objective weights.
+  - [x] Make L1 finalize the selected concrete dispatch/pack candidate.
+  - [x] Make L2 annotate/finalize the selected L1 candidate with
+        `candidate_id`.
+  - [x] Extend Rule Engine and evaluator checks for L3/L1/L2 candidate
+        consistency.
+  - [x] Add full L2 annotations for every candidate before L3 selection, not
+        only for the selected L1 candidate.
+  - [ ] Teach L3 to allocate multi-stage budgets from a single portfolio pass
+        instead of selecting only one command per harness cycle.
 - [ ] Split the large static `live_ui.py` into maintainable frontend assets or
   templates before the UI grows further.
 - [ ] Add recipe/APC recommendation endpoints:
@@ -78,17 +95,70 @@ scheduling, and machine-level APC quality behavior.
 
 ## Important Files
 
-- `sandox/semiconductor_ai_mes_final_design.md`: main design document.
-- `DESIGN.md`: frontend UX rules.
+- `docs/ai-mes/00_INDEX.md`: canonical AI MES documentation entry point.
+- `docs/ai-mes/02_LAYERED_AI_DECISION_ARCHITECTURE.md`: final layered AI
+  decision architecture.
+- `docs/ai-mes/04_RUNTIME_HARNESS_RULE_ENGINE.md`: target harness, Rule Engine,
+  validation, and command chain.
+- `docs/ai-mes/06_UI_CONTROL_ROOM_SPEC.md`: canonical MES control room UI spec.
+- `DESIGN.md`: root frontend visual rules, summarized in `docs/ai-mes/`.
+- `sandox/`: legacy drafts and static prototypes.
 - `src/mes/api.py`: FastAPI MES API and live runtime endpoints.
 - `src/mes/live_ui.py`: current live MES control room HTML/CSS/JS.
 - `src/mes/harness.py`: planner/generator/evaluator harness flow.
 - `src/mes/services.py`: MES service mapping and command behavior.
+- `src/mes/rule_engine.py`: Rule Engine validation before command creation.
 - `src/environment/process_a_env.py`: A process QA/APC event source.
 - `src/environment/process_b_env.py`: B process QA/APC event source.
 - `src/environment/process_c_env.py`: C packing behavior.
 - `tests/test_mes_api.py`: API contract tests.
 - `tests/test_mes_autoplay.py`: live/autoplay/Gantt tests.
+
+## Current Implementation Gap
+
+The current MES harness is still linear:
+
+```text
+MESPlannerAgent creates L4 objective and L3 stage priority
+  -> MESGeneratorAgent gets one stage's rule candidates
+  -> generator selects the first L1 candidate
+  -> generator creates one L2 recipe/APC recommendation
+  -> Rule Engine validates L1/L2 and creates a command
+```
+
+The canonical architecture requires a different decision order:
+
+```text
+L1 local candidate portfolio
+  -> L2 candidate annotations
+  -> L4 objective
+  -> L3 stage/group/candidate selection
+  -> L1 selected concrete allocation
+  -> L2 selected process fields
+  -> Rule Engine
+  -> Command
+```
+
+First implementation scope:
+
+```text
+C packing portfolio first, while keeping A/B behavior compatible.
+```
+
+This first slice should not rewrite the simulator kernel. It should keep the
+existing recommendation envelope and command shape, but add the missing
+portfolio fields:
+
+- `candidate_id`
+- `candidate_type`
+- `group_key`
+- `local_score`
+- `local_rank`
+- `features`
+- `reasons`
+- L3 `selected_candidate_id`
+- L3 `selected_group_key`
+- L2 `candidate_id`
 
 ## Notes
 

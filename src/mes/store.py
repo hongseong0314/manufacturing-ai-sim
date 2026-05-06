@@ -13,10 +13,14 @@ from typing import Any, Dict, List, Optional
 from src.mes.adapters import wafer_id_from_task_uid
 from src.mes.domain import (
     AIRecommendation,
+    Equipment,
     Event,
     FeatureSnapshot,
+    Lot,
     MESCommand,
+    Recipe,
     RuleValidationResult,
+    Wafer,
 )
 from src.mes.recommendations import make_id
 
@@ -35,6 +39,10 @@ class InMemoryMESStore:
     """Small repository for recommendation, command, and event audit records."""
 
     def __init__(self):
+        self._lots: Dict[str, Lot] = {}
+        self._wafers: Dict[str, Wafer] = {}
+        self._equipment: Dict[str, Equipment] = {}
+        self._recipes: Dict[str, Recipe] = {}
         self._feature_snapshots: Dict[str, FeatureSnapshot] = {}
         self._recommendations: Dict[str, AIRecommendation] = {}
         self._validations: List[RuleValidationResult] = []
@@ -87,6 +95,67 @@ class InMemoryMESStore:
 
     def add_event(self, event: Event) -> None:
         self._events.append(event)
+
+    def upsert_lot(self, lot: Lot) -> None:
+        self._lots[lot.lot_id] = lot
+
+    def upsert_wafer(self, wafer: Wafer) -> None:
+        self._wafers[wafer.wafer_id] = wafer
+
+    def upsert_equipment(self, equipment: Equipment) -> None:
+        self._equipment[equipment.equipment_id] = equipment
+
+    def upsert_recipe(self, recipe: Recipe) -> None:
+        self._recipes[recipe.recipe_id] = recipe
+
+    def sync_runtime_state(
+        self,
+        mes_state: Dict[str, Any],
+        recipes: Optional[List[Recipe]] = None,
+        replace: bool = False,
+    ) -> None:
+        """Persist the current simulator-derived MES runtime snapshot."""
+        if replace:
+            self.clear_runtime_state()
+        for item in mes_state.get("lots", []):
+            self.upsert_lot(Lot(**item))
+        for item in mes_state.get("wafers", []):
+            self.upsert_wafer(Wafer(**item))
+        for item in mes_state.get("equipment", []):
+            self.upsert_equipment(Equipment(**item))
+        for recipe in recipes or default_runtime_recipes():
+            self.upsert_recipe(recipe)
+
+    def clear_runtime_state(self) -> None:
+        self._lots.clear()
+        self._wafers.clear()
+        self._equipment.clear()
+        self._recipes.clear()
+
+    def lots(self) -> List[Lot]:
+        return list(self._lots.values())
+
+    def wafers(self, lot_id: Optional[str] = None) -> List[Wafer]:
+        wafers = list(self._wafers.values())
+        if lot_id is None:
+            return wafers
+        return [wafer for wafer in wafers if wafer.lot_id == lot_id]
+
+    def equipment(self, equipment_group_id: Optional[str] = None) -> List[Equipment]:
+        equipment = list(self._equipment.values())
+        if equipment_group_id is None:
+            return equipment
+        return [
+            tool
+            for tool in equipment
+            if tool.equipment_group_id == equipment_group_id
+        ]
+
+    def recipes(self, operation_id: Optional[str] = None) -> List[Recipe]:
+        recipes = list(self._recipes.values())
+        if operation_id is None:
+            return recipes
+        return [recipe for recipe in recipes if recipe.operation_id == operation_id]
 
     def feature_snapshots(
         self,
@@ -273,3 +342,28 @@ class InMemoryMESStore:
         if not isinstance(task_uids, list):
             return []
         return [wafer_id_from_task_uid(int(uid)) for uid in task_uids]
+
+
+def default_runtime_recipes() -> List[Recipe]:
+    """Simulator recipe masters available before recipe authoring APIs exist."""
+    return [
+        Recipe(
+            recipe_id="SIM_A_BASE",
+            operation_id="A",
+            equipment_group_id="A",
+            parameter_set={"temp": 10.0, "flow": 2.0, "duration": 1.0},
+            control_limits={"qa_low": 47.1, "qa_high": 52.9},
+        ),
+        Recipe(
+            recipe_id="SIM_B_DEFAULT",
+            operation_id="B",
+            equipment_group_id="B",
+            parameter_set={"chem_a": 50.0, "chem_b": 50.0, "time": 30.0},
+        ),
+        Recipe(
+            recipe_id="SIM_C_NO_RECIPE",
+            operation_id="C",
+            equipment_group_id="C",
+            parameter_set={},
+        ),
+    ]

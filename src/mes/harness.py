@@ -43,6 +43,7 @@ class HarnessPlan:
     objective: AIRecommendation
     stage_priority: AIRecommendation
     feature_snapshots: List[FeatureSnapshot] = field(default_factory=list)
+    candidate_portfolio: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def recommendations(self) -> List[AIRecommendation]:
@@ -57,6 +58,7 @@ class HarnessPlan:
             "feature_snapshots": [
                 snapshot.to_dict() for snapshot in self.feature_snapshots
             ],
+            "candidate_portfolio": list(self.candidate_portfolio),
         }
 
 
@@ -157,13 +159,32 @@ class MESPlannerAgent:
         decision_state: Dict[str, Any],
         target_stage: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        candidate_portfolio: Optional[List[Dict[str, Any]]] = None,
     ) -> HarnessPlan:
         resolved_correlation_id = correlation_id or make_id("CORR")
         now = int(decision_state.get("time", 0) or 0)
         trigger_due = (now % self.planning_interval) == 0
+        raw_portfolio = list(
+            candidate_portfolio
+            if candidate_portfolio is not None
+            else self.service.l1_candidate_portfolio(decision_state)
+        )
+        portfolio = self.service.annotate_candidate_portfolio(
+            decision_state,
+            raw_portfolio,
+        )
 
         objective_action = self._select_objective_action(decision_state, trigger_due)
-        resolved_stage = (target_stage or self._select_stage(decision_state)).upper()
+        selected_candidate = self._select_portfolio_candidate(
+            portfolio,
+            objective_action,
+            target_stage=target_stage,
+        )
+        resolved_stage = (
+            target_stage
+            or (selected_candidate or {}).get("stage")
+            or self._select_stage(decision_state, portfolio)
+        ).upper()
 
         l4_snapshot = self.service.create_feature_snapshot(
             decision_state,
@@ -195,9 +216,21 @@ class MESPlannerAgent:
             ],
         )
 
-        stage_priorities = {
-            stage: 1.0 if stage == resolved_stage else 0.0 for stage in ("A", "B", "C")
-        }
+        if selected_candidate is None and target_stage is not None:
+            selected_candidate = self._select_portfolio_candidate(
+                portfolio,
+                objective_action,
+                target_stage=resolved_stage,
+            )
+
+        stage_priorities = self._stage_priorities(
+            portfolio,
+            objective_action,
+            selected_stage=resolved_stage,
+        )
+        selected_group_key = dict((selected_candidate or {}).get("group_key", {}))
+        selected_candidate_id = (selected_candidate or {}).get("candidate_id")
+        score_components = self._score_components(selected_candidate, objective_action)
         l3_snapshot = self.service.create_feature_snapshot(
             decision_state,
             layer_id="L3",
@@ -205,6 +238,9 @@ class MESPlannerAgent:
             features={
                 "stage_priorities": stage_priorities,
                 "target_stage": resolved_stage,
+                "candidate_count": len(portfolio),
+                "selected_candidate_id": selected_candidate_id,
+                "selected_group_key": selected_group_key,
                 "objective_id": objective_action["objective_id"],
                 "task_generation_trigger_due": trigger_due,
             },
@@ -219,13 +255,18 @@ class MESPlannerAgent:
             feature_snapshot_id=l3_snapshot.feature_snapshot_id,
             correlation_id=resolved_correlation_id,
             parent_recommendation_id=objective.recommendation_id,
-            candidate_actions=[
-                {"stage": stage, "priority": priority}
-                for stage, priority in stage_priorities.items()
-            ],
+            candidate_actions=self._l3_candidate_actions(portfolio, objective_action),
             recommended_action={
                 "target_stage": resolved_stage,
+                "selected_stage": resolved_stage,
+                "selected_candidate_id": selected_candidate_id,
+                "selected_group_key": selected_group_key,
                 "stage_priorities": stage_priorities,
+                "score_components": score_components,
+                "constraints": {
+                    "max_commands_per_cycle": 1,
+                    "select_from_l1_portfolio": True,
+                },
                 "task_generation_trigger_due": trigger_due,
             },
             score=1.0,
@@ -246,13 +287,133 @@ class MESPlannerAgent:
             objective=objective,
             stage_priority=stage_priority,
             feature_snapshots=[l4_snapshot, l3_snapshot],
+            candidate_portfolio=portfolio,
         )
 
-    def _select_stage(self, decision_state: Dict[str, Any]) -> str:
+    def _select_stage(
+        self,
+        decision_state: Dict[str, Any],
+        candidate_portfolio: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        if candidate_portfolio:
+            return str(candidate_portfolio[0].get("stage", "A") or "A")
         for stage in ("A", "B", "C"):
             if self.service.dispatch_candidates(decision_state, stage=stage):
                 return stage
         return "A"
+
+    def _select_portfolio_candidate(
+        self,
+        candidate_portfolio: List[Dict[str, Any]],
+        objective_action: Dict[str, Any],
+        target_stage: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        candidates = [
+            candidate
+            for candidate in candidate_portfolio
+            if target_stage is None
+            or str(candidate.get("stage", "")).upper() == str(target_stage).upper()
+        ]
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda candidate: (
+                self._upper_score(candidate, objective_action),
+                float(candidate.get("local_score", 0.0) or 0.0),
+                -int(candidate.get("local_rank", 0) or 0),
+            ),
+        )
+
+    def _stage_priorities(
+        self,
+        candidate_portfolio: List[Dict[str, Any]],
+        objective_action: Dict[str, Any],
+        selected_stage: str,
+    ) -> Dict[str, float]:
+        scores = {stage: 0.0 for stage in ("A", "B", "C")}
+        for candidate in candidate_portfolio:
+            stage = str(candidate.get("stage", "")).upper()
+            if stage not in scores:
+                continue
+            scores[stage] = max(scores[stage], self._upper_score(candidate, objective_action))
+        max_score = max(scores.values()) if scores else 0.0
+        if max_score <= 0:
+            return {
+                stage: 1.0 if stage == selected_stage else 0.0
+                for stage in ("A", "B", "C")
+            }
+        return {
+            stage: round(score / max_score, 4)
+            for stage, score in scores.items()
+        }
+
+    def _l3_candidate_actions(
+        self,
+        candidate_portfolio: List[Dict[str, Any]],
+        objective_action: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        actions = []
+        for candidate in candidate_portfolio:
+            action = dict(candidate)
+            action["upper_score"] = round(
+                self._upper_score(candidate, objective_action),
+                4,
+            )
+            actions.append(action)
+        return actions
+
+    def _upper_score(
+        self,
+        candidate: Dict[str, Any],
+        objective_action: Dict[str, Any],
+    ) -> float:
+        features = dict(candidate.get("features", {}) or {})
+        annotation = dict(candidate.get("l2_annotation", {}) or {})
+        weights = dict(objective_action.get("weights", {}) or {})
+        local_score = float(candidate.get("local_score", 0.0) or 0.0)
+        due_pressure = float(features.get("due_date_pressure", 0.0) or 0.0)
+        batch_size = float(features.get("batch_size", 1.0) or 1.0)
+        margin_value = float(features.get("margin_value", 0.0) or 0.0)
+        throughput_weight = float(weights.get("throughput", 1.0) or 1.0)
+        tardiness_weight = float(weights.get("tardiness", 0.5) or 0.5)
+        customer_weight = float(weights.get("customer_priority", 1.0) or 1.0)
+        quality_risk_penalty = {
+            "LOW": 0.0,
+            "MEDIUM": 8.0,
+            "HIGH": 25.0,
+        }.get(str(annotation.get("quality_risk", "LOW")).upper(), 0.0)
+        return (
+            local_score
+            + tardiness_weight * due_pressure * 10.0
+            + throughput_weight * batch_size
+            + customer_weight * margin_value * 5.0
+            - quality_risk_penalty
+        )
+
+    def _score_components(
+        self,
+        selected_candidate: Optional[Dict[str, Any]],
+        objective_action: Dict[str, Any],
+    ) -> Dict[str, float]:
+        if selected_candidate is None:
+            return {
+                "local_candidate_score": 0.0,
+                "due_date_pressure": 0.0,
+                "upper_score": 0.0,
+            }
+        features = dict(selected_candidate.get("features", {}) or {})
+        return {
+            "local_candidate_score": float(
+                selected_candidate.get("local_score", 0.0) or 0.0
+            ),
+            "due_date_pressure": float(features.get("due_date_pressure", 0.0) or 0.0),
+            "wip_pressure": float(features.get("batch_size", 0.0) or 0.0),
+            "upper_score": round(
+                self._upper_score(selected_candidate, objective_action),
+                4,
+            ),
+        }
 
     def _objective_features(
         self,
@@ -282,8 +443,9 @@ class MESPlannerAgent:
         wait_total = 0
         for stage in ("A", "B", "C"):
             wait_total += len(decision_state.get(stage, {}).get("wait_pool_uids", []))
+        due_pressure = self._due_date_pressure(decision_state)
 
-        if tardiness > 0:
+        if tardiness > 0 or due_pressure > 0:
             return {
                 "objective_id": "OBJ_DUE_DATE_RECOVERY",
                 "weights": {
@@ -291,6 +453,7 @@ class MESPlannerAgent:
                     "yield": 1.0,
                     "tardiness": 1.4,
                     "cost": 0.2,
+                    "customer_priority": 1.2,
                 },
             }
         if wait_total >= 10:
@@ -310,8 +473,25 @@ class MESPlannerAgent:
                 "yield": 1.0,
                 "tardiness": 0.5,
                 "cost": 0.2,
+                "customer_priority": 1.0,
             },
         }
+
+    def _due_date_pressure(self, decision_state: Dict[str, Any]) -> float:
+        now = int(decision_state.get("time", 0) or 0)
+        pressure = 0.0
+        tasks = decision_state.get("tasks", {})
+        if not isinstance(tasks, dict):
+            return pressure
+        for row in tasks.values():
+            if not isinstance(row, dict):
+                continue
+            try:
+                due_date = int(row.get("due_date", now))
+            except (TypeError, ValueError):
+                continue
+            pressure = max(pressure, float(now - due_date))
+        return max(0.0, pressure)
 
 
 class MESGeneratorAgent:
@@ -325,10 +505,16 @@ class MESGeneratorAgent:
         decision_state: Dict[str, Any],
         plan: HarnessPlan,
     ) -> GeneratedDecision:
-        candidates = self.service.dispatch_candidates(
-            decision_state,
-            stage=plan.target_stage,
-        )
+        candidates = [
+            candidate
+            for candidate in plan.candidate_portfolio
+            if str(candidate.get("stage", "")).upper() == plan.target_stage
+        ]
+        if not candidates:
+            candidates = self.service.dispatch_candidates(
+                decision_state,
+                stage=plan.target_stage,
+            )
         if not candidates:
             empty_validation = RuleValidationResult(
                 "REJECTED",
@@ -350,9 +536,12 @@ class MESGeneratorAgent:
             features={
                 "target_stage": plan.target_stage,
                 "candidate_count": len(candidates),
+                "selected_candidate_id": plan.stage_priority.recommended_action.get(
+                    "selected_candidate_id"
+                ),
             },
         )
-        dispatch_action = candidates[0]
+        dispatch_action = self._select_l1_action_from_plan(plan, candidates)
         dispatch = create_recommendation(
             recommendation_type="DISPATCH" if plan.target_stage != "C" else "PACK",
             layer_id="L1",
@@ -367,7 +556,11 @@ class MESGeneratorAgent:
             recommended_action=dispatch_action,
             score=1.0,
             confidence=1.0,
-            reasons=["selected_first_rule_eligible_candidate"],
+            reasons=[
+                "selected_by_l3_from_l1_portfolio"
+                if plan.stage_priority.recommended_action.get("selected_candidate_id")
+                else "selected_first_rule_eligible_candidate"
+            ],
         )
 
         recipe_action = self._default_recipe_action(
@@ -384,6 +577,9 @@ class MESGeneratorAgent:
                 "dispatch_recommendation_id": dispatch.recommendation_id,
                 "equipment_id": dispatch_action.get("equipment_id"),
                 "apc_policy": recipe_action.get("apc_policy"),
+                "preselect_annotation_count": len(
+                    self._candidate_l2_annotations(candidates)
+                ),
             },
         )
         recipe = create_recommendation(
@@ -396,7 +592,7 @@ class MESGeneratorAgent:
             feature_snapshot_id=l2_snapshot.feature_snapshot_id,
             correlation_id=plan.correlation_id,
             parent_recommendation_id=dispatch.recommendation_id,
-            candidate_actions=[recipe_action],
+            candidate_actions=self._candidate_l2_actions(candidates, recipe_action),
             recommended_action=recipe_action,
             score=1.0,
             confidence=1.0,
@@ -416,6 +612,67 @@ class MESGeneratorAgent:
             simulator_actions=simulator_actions,
             feature_snapshots=list(plan.feature_snapshots) + [l1_snapshot, l2_snapshot],
         )
+
+    def _select_l1_action_from_plan(
+        self,
+        plan: HarnessPlan,
+        candidates: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        selected_candidate_id = plan.stage_priority.recommended_action.get(
+            "selected_candidate_id"
+        )
+        if selected_candidate_id:
+            for candidate in candidates:
+                if candidate.get("candidate_id") == selected_candidate_id:
+                    return dict(candidate)
+        selected_group_key = plan.stage_priority.recommended_action.get(
+            "selected_group_key"
+        )
+        if isinstance(selected_group_key, dict) and selected_group_key:
+            for candidate in candidates:
+                group_key = candidate.get("group_key")
+                if isinstance(group_key, dict) and self._group_contains(
+                    group_key,
+                    selected_group_key,
+                ):
+                    return dict(candidate)
+        return dict(candidates[0])
+
+    def _group_contains(
+        self,
+        candidate_group: Dict[str, Any],
+        selected_group: Dict[str, Any],
+    ) -> bool:
+        for key, value in selected_group.items():
+            if candidate_group.get(key) != value:
+                return False
+        return True
+
+    def _candidate_l2_actions(
+        self,
+        candidates: List[Dict[str, Any]],
+        selected_action: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        annotations = self._candidate_l2_annotations(candidates)
+        if not annotations:
+            return [selected_action]
+        selected_candidate_id = selected_action.get("candidate_id")
+        if selected_candidate_id and selected_candidate_id not in {
+            annotation.get("candidate_id") for annotation in annotations
+        }:
+            annotations.append(dict(selected_action))
+        return annotations
+
+    def _candidate_l2_annotations(
+        self,
+        candidates: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        annotations = []
+        for candidate in candidates:
+            annotation = candidate.get("l2_annotation")
+            if isinstance(annotation, dict):
+                annotations.append(dict(annotation))
+        return annotations
 
     def generate_continuous(
         self,
@@ -469,17 +726,32 @@ class MESGeneratorAgent:
         dispatch_action: Optional[Dict[str, Any]] = None,
         decision_state: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        action = dispatch_action or {}
+        candidate_id = action.get("candidate_id")
         if stage == "A":
-            return self._recipe_action_a(dispatch_action or {}, decision_state or {})
+            return self._recipe_action_a(action, decision_state or {})
         if stage == "B":
             return {
+                "candidate_id": candidate_id,
                 "recipe_id": "SIM_B_DEFAULT",
                 "recipe": [50.0, 50.0, 30.0],
                 "parameters": {"chem_a": 50.0, "chem_b": 50.0, "time": 30.0},
                 "replace_solution": False,
                 "apc_mode": "L1L2_COMPOSED",
             }
-        return {"recipe_id": "SIM_C_NO_RECIPE", "recipe": [], "apc_mode": "L1L2_COMPOSED"}
+        features = dict(action.get("features", {}) or {})
+        compatibility = float(features.get("compatibility", 0.0) or 0.0)
+        return {
+            "candidate_id": candidate_id,
+            "recipe_id": "SIM_C_NO_RECIPE",
+            "recipe": [],
+            "apc_mode": "L1L2_COMPOSED",
+            "pack_quality_prediction": features.get("avg_quality"),
+            "compatibility": compatibility,
+            "pack_mode": "STANDARD",
+            "quality_risk": "LOW" if compatibility >= 0.8 else "MEDIUM",
+            "selection_reason": "c_pack_process_annotation_for_selected_candidate",
+        }
 
     def _recipe_action_a(
         self,
@@ -539,6 +811,7 @@ class MESGeneratorAgent:
             reason = "default_recipe_within_spec"
 
         return {
+            "candidate_id": dispatch_action.get("candidate_id"),
             "recipe_id": selected["recipe_id"],
             "recipe": recipe,
             "parameters": {"temp": recipe[0], "flow": recipe[1], "duration": recipe[2]},
@@ -631,6 +904,7 @@ class MESEvaluatorAgent:
         self._check_correlation_ids(recommendations, issues)
         self._check_feature_snapshots(recommendations, issues)
         self._check_parent_chain(by_layer, issues)
+        self._check_candidate_consistency(by_layer, issues)
         self._check_validation(generated.validation, issues)
         self._check_simulator_actions(generated, issues)
         if store is not None:
@@ -641,6 +915,10 @@ class MESEvaluatorAgent:
             "single_correlation_id": "CORRELATION_ID_MISMATCH" not in issues,
             "feature_snapshots": "MISSING_FEATURE_SNAPSHOT_ID" not in issues,
             "parent_chain": "BROKEN_PARENT_CHAIN" not in issues,
+            "candidate_portfolio": "MISSING_CANDIDATE_PORTFOLIO" not in issues,
+            "candidate_consistency": not any(
+                issue.startswith("CANDIDATE_") for issue in issues
+            ),
             "rule_validation": generated.validation.passed,
             "simulator_actions": bool(
                 self._non_empty_actions(generated.simulator_actions)
@@ -710,6 +988,42 @@ class MESEvaluatorAgent:
             if by_layer[layer].parent_recommendation_id != parent_id:
                 issues.append("BROKEN_PARENT_CHAIN")
                 return
+
+    def _check_candidate_consistency(
+        self,
+        by_layer: Dict[str, AIRecommendation],
+        issues: List[str],
+    ) -> None:
+        if not all(layer in by_layer for layer in ("L3", "L1", "L2")):
+            return
+        l3 = by_layer["L3"]
+        l1 = by_layer["L1"]
+        l2 = by_layer["L2"]
+        l1_action = dict(l1.recommended_action or {})
+        l2_action = dict(l2.recommended_action or {})
+        l3_action = dict(l3.recommended_action or {})
+        candidate_id = l1_action.get("candidate_id")
+        if not candidate_id:
+            issues.append("CANDIDATE_ID_MISSING")
+            return
+        l1_portfolio_ids = {
+            candidate.get("candidate_id")
+            for candidate in l1.candidate_actions
+            if isinstance(candidate, dict)
+        }
+        if not l1_portfolio_ids:
+            issues.append("MISSING_CANDIDATE_PORTFOLIO")
+            return
+        if candidate_id not in l1_portfolio_ids:
+            issues.append("CANDIDATE_NOT_IN_L1_PORTFOLIO")
+            return
+        selected_candidate_id = l3_action.get("selected_candidate_id")
+        if selected_candidate_id and selected_candidate_id != candidate_id:
+            issues.append("CANDIDATE_L3_L1_MISMATCH")
+            return
+        l2_candidate_id = l2_action.get("candidate_id")
+        if l2_candidate_id and l2_candidate_id != candidate_id:
+            issues.append("CANDIDATE_L2_L1_MISMATCH")
 
     def _check_validation(
         self,

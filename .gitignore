@@ -33,7 +33,9 @@ src/graphify-out/
 # Environment variables
 .env
 
-docs
+docs/*
+!docs/ai-mes/
+!docs/ai-mes/**
 
 # Other
 .DS_Store

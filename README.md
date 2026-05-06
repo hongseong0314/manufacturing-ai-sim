@@ -97,9 +97,10 @@ tests/
   test_gantt_validation.py          # Multi-scenario Gantt validation
   simple_debug_test.py              # Lightweight smoke test
 docs/
-  EXTENSIBLE_MANUFACTURING_SIMULATION_GUIDE.md   # Full handbook (15 chapters)
-  AI_DEVELOPER_GUIDE.md                          # AI/algorithm developer reference
-  VALIDATION_GUIDE.md                            # Validation protocol
+  ai-mes/                          # Canonical AI MES architecture, API, UI, and roadmap
+  EXTENSIBLE_MANUFACTURING_SIMULATION_GUIDE.md   # Legacy simulator handbook
+  AI_DEVELOPER_GUIDE.md                          # Legacy AI developer reference
+  VALIDATION_GUIDE.md                            # Legacy validation protocol
 results/                            # Generated plots and Gantt charts
 ```
 
@@ -179,7 +180,7 @@ print(f"Completed tasks: {obs['num_completed']}")
 
 ## Research Scenarios
 
-Four canonical experiment structures are pre-defined in Chapter 6 of the handbook:
+Four core experiment structures guide simulator policy work:
 
 | Scenario | Question | Key config |
 |---|---|---|
@@ -200,10 +201,10 @@ Four canonical experiment structures are pre-defined in Chapter 6 of the handboo
 
 **Modify process physics** — edit `_run_qa_check(...)` and `_get_physical_model_params(...)` in the relevant process env module. Keep method signatures and return semantics stable.
 
-**RL integration** — `RLBasedScheduler` and `RLBasedTuner` are scaffold classes that fall back to heuristic baselines. Implement your policy inside `select_batch()` / `get_recipe()`. A minimal `gymnasium` wrapper skeleton is provided in Chapter 8.7 of the handbook.
+**RL integration** — `RLBasedScheduler` and `RLBasedTuner` are scaffold classes that fall back to heuristic baselines. Implement your policy inside `select_batch()` / `get_recipe()`.
 
-See `docs/AI_DEVELOPER_GUIDE.md` for interface contracts and copy-paste templates.
-See `docs/EXTENSIBLE_MANUFACTURING_SIMULATION_GUIDE.md` for playbooks, case studies, research scenarios, and parameter reference.
+Start with `docs/ai-mes/00_INDEX.md` for the current AI MES architecture and roadmap.
+The older handbook files under `docs/` remain useful historical references.
 
 ---
 
@@ -237,6 +238,7 @@ Expected output: no assertion errors; `results/scenario*_gantt_direct.png` gener
 
 | File | Audience | Contents |
 |---|---|---|
-| [`docs/EXTENSIBLE_MANUFACTURING_SIMULATION_GUIDE.md`](docs/EXTENSIBLE_MANUFACTURING_SIMULATION_GUIDE.md) | Everyone | Full handbook — multi-layer problem framing, physical models, research scenarios, extension playbooks, parameter reference, case studies, research roadmap |
-| [`docs/AI_DEVELOPER_GUIDE.md`](docs/AI_DEVELOPER_GUIDE.md) | Algorithm developers / AI agents | Interface contracts, implementation templates, optimization objectives |
-| [`docs/VALIDATION_GUIDE.md`](docs/VALIDATION_GUIDE.md) | Developers | Validation scenario policy and Gantt generation protocol |
+| [`docs/ai-mes/00_INDEX.md`](docs/ai-mes/00_INDEX.md) | Everyone | Canonical AI MES documentation map and source-of-truth rules |
+| [`docs/ai-mes/02_LAYERED_AI_DECISION_ARCHITECTURE.md`](docs/ai-mes/02_LAYERED_AI_DECISION_ARCHITECTURE.md) | AI / scheduling developers | Final 4-layer architecture: bottom-up candidate intelligence and top-down execution intent |
+| [`docs/ai-mes/04_RUNTIME_HARNESS_RULE_ENGINE.md`](docs/ai-mes/04_RUNTIME_HARNESS_RULE_ENGINE.md) | MES backend developers | Harness, Rule Engine, command, event, and simulator execution runtime |
+| [`docs/ai-mes/06_UI_CONTROL_ROOM_SPEC.md`](docs/ai-mes/06_UI_CONTROL_ROOM_SPEC.md) | UI developers | MES control room views, visual rules, and API bindings |

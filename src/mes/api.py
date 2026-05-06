@@ -58,6 +58,7 @@ class MESAPIContext:
 
     def reset_runtime(self) -> None:
         self.env = _build_default_env()
+        self.store.clear_runtime_state()
         self.autoplay_enabled = False
         self.autoplay_target_stage = "AUTO"
         self.last_generation_time = None
@@ -77,7 +78,11 @@ def _normalize_target_stage(value: Optional[str], default: str = "AUTO") -> str:
 
 
 def _mes_state() -> Dict[str, Any]:
-    return context.harness.service.decision_state_to_mes(context.env.get_decision_state())
+    mes_state = context.harness.service.decision_state_to_mes(
+        context.env.get_decision_state()
+    )
+    context.harness.store.sync_runtime_state(mes_state)
+    return mes_state
 
 
 def _generate_tasks(time_point: Optional[int] = None) -> Dict[str, Any]:
@@ -458,6 +463,7 @@ def _decision_chain(correlation_id: Optional[str]) -> Dict[str, Any]:
 
 def _live_fab_state() -> Dict[str, Any]:
     decision_state = context.env.get_decision_state()
+    _mes_state()
     stages = {
         stage: _stage_summary(stage, decision_state)
         for stage in STAGES
@@ -1077,22 +1083,47 @@ def get_wip() -> Dict[str, Any]:
 @app.get("/api/v1/equipment")
 def get_equipment() -> Dict[str, Any]:
     mes_state = _mes_state()
-    items = mes_state.get("equipment", [])
-    return {"time": mes_state.get("time", 0), "count": len(items), "items": items}
+    items = context.harness.store.equipment()
+    return {
+        "time": mes_state.get("time", 0),
+        "count": len(items),
+        "items": [item.to_dict() for item in items],
+    }
 
 
 @app.get("/api/v1/lots")
 def get_lots() -> Dict[str, Any]:
     mes_state = _mes_state()
-    items = mes_state.get("lots", [])
-    return {"time": mes_state.get("time", 0), "count": len(items), "items": items}
+    items = context.harness.store.lots()
+    return {
+        "time": mes_state.get("time", 0),
+        "count": len(items),
+        "items": [item.to_dict() for item in items],
+    }
 
 
 @app.get("/api/v1/wafers")
-def get_wafers() -> Dict[str, Any]:
+def get_wafers(lot_id: Optional[str] = Query(None)) -> Dict[str, Any]:
     mes_state = _mes_state()
-    items = mes_state.get("wafers", [])
-    return {"time": mes_state.get("time", 0), "count": len(items), "items": items}
+    items = context.harness.store.wafers(lot_id)
+    return {
+        "time": mes_state.get("time", 0),
+        "lot_id": lot_id,
+        "count": len(items),
+        "items": [item.to_dict() for item in items],
+    }
+
+
+@app.get("/api/v1/recipes")
+def get_recipes(operation_id: Optional[str] = Query(None)) -> Dict[str, Any]:
+    mes_state = _mes_state()
+    items = context.harness.store.recipes(operation_id)
+    return {
+        "time": mes_state.get("time", 0),
+        "operation_id": operation_id,
+        "count": len(items),
+        "items": [item.to_dict() for item in items],
+    }
 
 
 @app.get("/api/v1/dispatch/candidates")

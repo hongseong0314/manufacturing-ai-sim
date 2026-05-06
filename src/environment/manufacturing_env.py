@@ -263,6 +263,7 @@ class ManufacturingEnv:
             "arrival_time": int(getattr(task, "arrival_time", 0)),
             "material_type": getattr(task, "material_type", "plastic"),
             "color": getattr(task, "color", "red"),
+            "customer_id": getattr(task, "customer_id", "UNKNOWN"),
             "margin_value": float(getattr(task, "margin_value", 0.5)),
             "realized_qa_A": float(getattr(task, "realized_qa_A", -1.0)),
             "realized_qa_B": float(getattr(task, "realized_qa_B", -1.0)),

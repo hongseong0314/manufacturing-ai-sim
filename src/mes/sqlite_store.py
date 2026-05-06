@@ -17,10 +17,14 @@ from typing import Any, Dict, Iterable, Optional
 
 from src.mes.domain import (
     AIRecommendation,
+    Equipment,
     Event,
     FeatureSnapshot,
+    Lot,
     MESCommand,
+    Recipe,
     RuleValidationResult,
+    Wafer,
 )
 from src.mes.store import InMemoryMESStore
 
@@ -29,6 +33,10 @@ class SQLiteMESStore(InMemoryMESStore):
     """Write-through SQLite store with an in-memory query cache."""
 
     TABLES = {
+        "lots": "lot_id",
+        "wafers": "wafer_id",
+        "equipment": "equipment_id",
+        "recipes": "recipe_id",
         "feature_snapshots": "feature_snapshot_id",
         "recommendations": "recommendation_id",
         "commands": "command_id",
@@ -87,6 +95,28 @@ class SQLiteMESStore(InMemoryMESStore):
         super().add_event(event)
         self._insert("events", event.event_id, event.correlation_id, event.to_dict())
 
+    def upsert_lot(self, lot: Lot) -> None:
+        super().upsert_lot(lot)
+        self._upsert("lots", lot.lot_id, "", lot.to_dict())
+
+    def upsert_wafer(self, wafer: Wafer) -> None:
+        super().upsert_wafer(wafer)
+        self._upsert("wafers", wafer.wafer_id, "", wafer.to_dict())
+
+    def upsert_equipment(self, equipment: Equipment) -> None:
+        super().upsert_equipment(equipment)
+        self._upsert("equipment", equipment.equipment_id, "", equipment.to_dict())
+
+    def upsert_recipe(self, recipe: Recipe) -> None:
+        super().upsert_recipe(recipe)
+        self._upsert("recipes", recipe.recipe_id, "", recipe.to_dict())
+
+    def clear_runtime_state(self) -> None:
+        super().clear_runtime_state()
+        for table in ("lots", "wafers", "equipment", "recipes"):
+            self._conn.execute(f"DELETE FROM {table}")
+        self._conn.commit()
+
     def record_command_executed(
         self,
         command_id: str,
@@ -128,6 +158,18 @@ class SQLiteMESStore(InMemoryMESStore):
         self._conn.commit()
 
     def _load_cache(self) -> None:
+        for payload in self._rows("lots", limit=self.cache_limit):
+            lot = Lot(**payload)
+            self._lots[lot.lot_id] = lot
+        for payload in self._rows("wafers", limit=self.cache_limit):
+            wafer = Wafer(**payload)
+            self._wafers[wafer.wafer_id] = wafer
+        for payload in self._rows("equipment", limit=self.cache_limit):
+            equipment = Equipment(**payload)
+            self._equipment[equipment.equipment_id] = equipment
+        for payload in self._rows("recipes", limit=self.cache_limit):
+            recipe = Recipe(**payload)
+            self._recipes[recipe.recipe_id] = recipe
         for payload in self._rows("feature_snapshots", limit=self.cache_limit):
             snapshot = FeatureSnapshot(**payload)
             self._feature_snapshots[snapshot.feature_snapshot_id] = snapshot

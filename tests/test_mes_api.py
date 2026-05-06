@@ -40,6 +40,25 @@ def test_kpi_wip_equipment_endpoints():
         body = r.json()
         assert 'time' in body
 
+
+def test_runtime_entity_endpoints_are_store_backed():
+    client.post('/api/v2/tasks/generate', json={'time_point': 120})
+
+    lots = client.get('/api/v1/lots').json()
+    wafers = client.get('/api/v1/wafers').json()
+    equipment = client.get('/api/v1/equipment').json()
+    recipes = client.get('/api/v1/recipes').json()
+
+    assert lots['count'] > 0
+    assert wafers['count'] >= lots['count']
+    assert equipment['count'] == 18
+    assert recipes['count'] >= 3
+    assert {item['recipe_id'] for item in recipes['items']} >= {
+        'SIM_A_BASE',
+        'SIM_B_DEFAULT',
+        'SIM_C_NO_RECIPE',
+    }
+
 def test_harness_run_rejected_stage_has_validation_and_no_command():
     run = client.post('/api/v1/harness/run?target_stage=B')
     assert run.status_code == 200

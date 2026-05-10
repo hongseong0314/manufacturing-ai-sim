@@ -241,26 +241,19 @@ L4 OBJECTIVE
   -> COMMAND
 ```
 
-The difference from the current implementation is that `candidate_actions` must
-carry real portfolios, and upper layers must select from those portfolios.
-
-## Current Implementation Gap
-
-Current `MESPlannerAgent` creates L4 and L3 before L1 candidates exist. Current
-`MESGeneratorAgent` creates one L1 candidate and one L2 recommendation after
-that. This is acceptable as a rule-only baseline, but it cannot express the
-desired factorization.
-
-Target change:
+Current implementation status:
 
 ```text
-Current:
-  L4/L3 choose stage -> L1 chooses first candidate -> L2 recipe -> validation
-
-Target:
-  L1 portfolio -> L2 annotations -> L3/L4 choose group/stage/objective
+Implemented MES path:
+  L1 portfolio -> L2 annotations -> L4 objective policy -> L3 meta policy
     -> L1 finalizes candidate -> L2 finalizes process fields -> validation
 ```
+
+`src/agents/factory.py` now builds a `MESPolicyStack` with L1, L2, L3, and L4
+policy slots. The default L3 policy is `L3_CANDIDATE_PORTFOLIO_RULE`, and the
+default L4 policy is `L4_CYCLE_WEIGHT_RULE`. `MESPlannerAgent` remains the
+audit orchestrator for plan creation, but it delegates objective selection and
+meta scheduling to those policy objects.
 
 ## Layer Boundary Rules
 
@@ -270,4 +263,3 @@ Target:
 - L4 owns objective weights and governance.
 - Rule Engine owns final executability.
 - Environment owns physics and state transitions.
-

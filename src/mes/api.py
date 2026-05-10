@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import os
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -25,13 +26,15 @@ EMPTY_ACTIONS = {"A": {}, "B": {}, "C": {}}
 def _build_default_env() -> ManufacturingEnv:
     env = ManufacturingEnv(
         {
-            "num_machines_A": 10,
-            "num_machines_B": 5,
+            "num_machines_A": 5,
+            "num_machines_B": 3,
             "num_machines_C": 3,
+            "batch_size_A": 3,
+            "batch_size_B": 2,
             "batch_size_C": 4,
             "max_packs_per_step": 3,
             "process_time_A": 20,
-            "process_time_B": 5,
+            "process_time_B": 8,
             "process_time_C": 2,
             "deterministic_mode": True,
         }
@@ -48,7 +51,7 @@ class MESAPIContext:
     def __init__(self):
         self.env = _build_default_env()
         self.store = SQLiteMESStore(_default_db_path())
-        self.harness = MESDevelopmentHarness(store=self.store)
+        self.harness = MESDevelopmentHarness(config=self.env.config, store=self.store)
         self.autoplay_enabled = False
         self.autoplay_target_stage = "AUTO"
         self.autoplay_generate_every = 20
@@ -239,17 +242,45 @@ def _record_step_for_results(
 def _run_auto_cycle() -> Dict[str, Any]:
     generated_tasks = _maybe_generate_periodic_tasks()
     state = context.env.get_decision_state()
-    stages = _ready_stages("AUTO")
+    budget_plan = context.harness.planner.plan(state)
+    budget_action = dict(budget_plan.stage_priority.recommended_action or {})
+    candidate_by_id = {
+        candidate.get("candidate_id"): candidate
+        for candidate in budget_plan.candidate_portfolio
+        if candidate.get("candidate_id")
+    }
+    selected_candidate_ids = [
+        candidate_id
+        for candidate_id in budget_action.get("selected_candidate_ids", [])
+        if candidate_id in candidate_by_id
+    ]
+    stages = [
+        stage
+        for stage, budget in budget_action.get("dispatch_budgets", {}).items()
+        if int(budget or 0) > 0
+    ]
     results = []
     working_state = copy.deepcopy(state)
     combined_actions = {"A": {}, "B": {}, "C": {}}
 
-    for stage in stages:
-        stage_results, working_state = _run_parallel_stage(stage, working_state)
-        results.extend(stage_results)
-        for result in stage_results:
-            if result.passed and result.command is not None:
-                _merge_actions(combined_actions, result.simulator_actions)
+    for candidate_id in selected_candidate_ids:
+        candidate = candidate_by_id[candidate_id]
+        stage = str(candidate.get("stage", "")).upper()
+        if stage not in STAGES:
+            continue
+        result = context.harness.run(
+            working_state,
+            target_stage=stage,
+            candidate_portfolio=[candidate],
+        )
+        results.append(result)
+        if not result.passed or result.command is None:
+            break
+        _merge_actions(combined_actions, result.simulator_actions)
+        working_state = _reserve_assignment_in_state(
+            working_state,
+            result.generated.validation.validated_command,
+        )
 
     if any(combined_actions[stage] for stage in STAGES):
         observation, reward, done, info = context.env.step(combined_actions)
@@ -277,6 +308,9 @@ def _run_auto_cycle() -> Dict[str, Any]:
     payload = {
         "mode": "AUTO",
         "target_stages": stages,
+        "selection_source": "l3_budget_plan",
+        "budget_plan": budget_action,
+        "budget_correlation_id": budget_plan.correlation_id,
         "count": len(results),
         "stop_reason": stop_reason,
         "generated_tasks": generated_tasks,
@@ -445,12 +479,14 @@ def _decision_chain(correlation_id: Optional[str]) -> Dict[str, Any]:
     validations = context.harness.store.validations(correlation_id)
     commands = context.harness.store.commands(correlation_id)
     validation_status = validations[-1].validation_status if validations else "PENDING"
+    recommendation_dicts = [item.to_dict() for item in recommendations]
     return {
         "correlation_id": correlation_id,
-        "recommendations": [item.to_dict() for item in recommendations],
+        "recommendations": recommendation_dicts,
         "events": [item.to_dict() for item in events],
         "validations": [item.to_dict() for item in validations],
         "commands": [item.to_dict() for item in commands],
+        "traceability": _chain_traceability(recommendation_dicts, commands),
         "validation_status": validation_status,
         "counts": {
             "recommendations": len(recommendations),
@@ -458,6 +494,58 @@ def _decision_chain(correlation_id: Optional[str]) -> Dict[str, Any]:
             "validations": len(validations),
             "commands": len(commands),
         },
+    }
+
+
+def _chain_traceability(
+    recommendations: List[Dict[str, Any]],
+    commands: List[Any],
+) -> Dict[str, Any]:
+    by_layer = {item.get("layer_id"): item for item in recommendations}
+    l4 = by_layer.get("L4", {})
+    l3 = by_layer.get("L3", {})
+    l1 = by_layer.get("L1", {})
+    l2 = by_layer.get("L2", {})
+    l3_action = dict(l3.get("recommended_action") or {})
+    selected_ids = set(l3_action.get("selected_candidate_ids") or [])
+    selected_id = l3_action.get("selected_candidate_id")
+    if selected_id:
+        selected_ids.add(selected_id)
+    candidate_actions = [
+        candidate
+        for candidate in l3.get("candidate_actions", [])
+        if isinstance(candidate, dict)
+    ]
+    selected_candidates = [
+        candidate
+        for candidate in candidate_actions
+        if candidate.get("candidate_id") in selected_ids
+    ]
+    l2_actions = [
+        action
+        for action in l2.get("candidate_actions", [])
+        if isinstance(action, dict)
+    ]
+    command_dict = commands[-1].to_dict() if commands else {}
+    validated_command = command_dict.get("validated_command", {})
+    return {
+        "objective_id": l4.get("objective_id"),
+        "l4_policy_id": l4.get("policy_id"),
+        "l3_policy_id": l3.get("policy_id"),
+        "objective_weights": dict((l4.get("recommended_action") or {}).get("weights") or {}),
+        "stage_priorities": dict(l3_action.get("stage_priorities") or {}),
+        "dispatch_budgets": dict(l3_action.get("dispatch_budgets") or {}),
+        "budget_candidate_ids": dict(l3_action.get("budget_candidate_ids") or {}),
+        "selected_candidate_id": selected_id,
+        "selected_candidate_ids": list(l3_action.get("selected_candidate_ids") or []),
+        "selected_group_key": dict(l3_action.get("selected_group_key") or {}),
+        "candidate_count": len(candidate_actions),
+        "selected_candidates": selected_candidates,
+        "l2_annotation_count": len(l2_actions),
+        "l2_annotations": l2_actions,
+        "final_l1_action": dict(l1.get("recommended_action") or {}),
+        "final_l2_action": dict(l2.get("recommended_action") or {}),
+        "command": validated_command,
     }
 
 
@@ -654,6 +742,163 @@ def _machine_recent_assignments(stage: str, equipment_id: str) -> List[Dict[str,
     return sorted(assignments, key=lambda item: item["time"], reverse=True)[:8]
 
 
+def _task_rows_for_uids(
+    decision_state: Dict[str, Any],
+    task_uids: List[int],
+) -> List[Dict[str, Any]]:
+    tasks = decision_state.get("tasks", {})
+    rows: List[Dict[str, Any]] = []
+    if not isinstance(tasks, dict):
+        return rows
+    for uid in task_uids:
+        row = tasks.get(uid) or tasks.get(str(uid))
+        if isinstance(row, dict):
+            rows.append(dict(row))
+    return rows
+
+
+def _count_values(rows: List[Dict[str, Any]], key: str) -> Dict[str, int]:
+    counts = Counter(str(row.get(key, "UNKNOWN")) for row in rows)
+    return dict(sorted(counts.items()))
+
+
+def _c_composition_metrics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    material_counts = _count_values(rows, "material_type")
+    color_counts = _count_values(rows, "color")
+    batch_size = len(rows)
+    material_match_count = max(material_counts.values()) if material_counts else 0
+    color_match_count = max(color_counts.values()) if color_counts else 0
+    denominator = max(1, batch_size * 2)
+    composition_quality = round(
+        ((material_match_count + color_match_count) / denominator) * 100,
+        4,
+    )
+    dominant_material = (
+        max(material_counts.items(), key=lambda item: item[1])[0]
+        if material_counts
+        else "UNKNOWN"
+    )
+    dominant_color = (
+        max(color_counts.items(), key=lambda item: item[1])[0]
+        if color_counts
+        else "UNKNOWN"
+    )
+    return {
+        "material_counts": material_counts,
+        "color_counts": color_counts,
+        "material_match_count": material_match_count,
+        "color_match_count": color_match_count,
+        "dominant_material": dominant_material,
+        "dominant_color": dominant_color,
+        "composition_quality": composition_quality,
+        "avg_compatibility": round(composition_quality / 100, 4),
+        "composition_label": (
+            f"{dominant_material} {material_match_count}/{batch_size} · "
+            f"{dominant_color} {color_match_count}/{batch_size}"
+            if batch_size
+            else "empty"
+        ),
+    }
+
+
+def _c_pack_series(
+    equipment_id: str,
+    decision_state: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    series: List[Dict[str, Any]] = []
+    env = _stage_env("C")
+    for index, event in enumerate(getattr(env, "event_log", []) or []):
+        if str(event.get("event_type", "")) != "pack_completed":
+            continue
+        if str(event.get("machine_id", "")) != equipment_id:
+            continue
+        task_uids = [int(uid) for uid in event.get("task_uids", [])]
+        rows = _task_rows_for_uids(decision_state, task_uids)
+        metrics = _c_composition_metrics(rows)
+        quality = round(float(event.get("pack_quality", metrics["composition_quality"])), 4)
+        avg_compatibility = round(float(event.get("avg_compat", metrics["avg_compatibility"])), 4)
+        avg_wait_time = round(float(event.get("avg_wait_time", 0.0) or 0.0), 4)
+        point = {
+            "point_id": f"{equipment_id}-pack-{event.get('pack_id', index)}",
+            "time": int(event.get("timestamp", event.get("end_time", 0)) or 0),
+            "step": int(event.get("timestamp", event.get("end_time", 0)) or 0),
+            "stage": "C",
+            "equipment_id": equipment_id,
+            "pack_id": event.get("pack_id", index),
+            "task_uids": task_uids,
+            "task_codes": [_task_code(uid) for uid in task_uids],
+            "quality": quality,
+            "quality_values": [quality],
+            "composition_quality": quality,
+            "avg_compatibility": avg_compatibility,
+            "avg_wait_time": avg_wait_time,
+            "material_counts": dict(event.get("material_counts") or metrics["material_counts"]),
+            "color_counts": dict(event.get("color_counts") or metrics["color_counts"]),
+            "material_match_count": int(
+                event.get("material_match_count", metrics["material_match_count"]) or 0
+            ),
+            "color_match_count": int(
+                event.get("color_match_count", metrics["color_match_count"]) or 0
+            ),
+            "dominant_material": event.get("dominant_material", metrics["dominant_material"]),
+            "dominant_color": event.get("dominant_color", metrics["dominant_color"]),
+            "composition_label": metrics["composition_label"],
+            "reason": event.get("reason", "pack_completed"),
+            "target_window": [0.0, 100.0],
+            "passed": quality >= 50.0,
+            "event_type": "pack_completed",
+        }
+        series.append(point)
+    return sorted(series, key=lambda point: (point["time"], point["point_id"]))
+
+
+def _c_pack_kpis(
+    series: List[Dict[str, Any]],
+    machine_state: Dict[str, Any],
+) -> Dict[str, Any]:
+    packed_tasks = sum(len(point.get("task_uids", [])) for point in series)
+    qualities = [float(point.get("composition_quality", 0.0) or 0.0) for point in series]
+    compatibilities = [float(point.get("avg_compatibility", 0.0) or 0.0) for point in series]
+    material_mix = Counter()
+    color_mix = Counter()
+    for point in series:
+        material_mix.update(point.get("material_counts", {}))
+        color_mix.update(point.get("color_counts", {}))
+    return {
+        "packs_completed": len(series),
+        "packed_tasks": packed_tasks,
+        "avg_quality": round(sum(qualities) / len(qualities), 3) if qualities else None,
+        "latest_quality": qualities[-1] if qualities else None,
+        "avg_compatibility": (
+            round(sum(compatibilities) / len(compatibilities), 4)
+            if compatibilities
+            else 0.0
+        ),
+        "active_wip": len(machine_state.get("current_batch_uids", []) or []),
+        "sample_count": packed_tasks,
+        "material_mix": dict(sorted(material_mix.items())),
+        "color_mix": dict(sorted(color_mix.items())),
+        "yield_rate": 1.0,
+        "processed": packed_tasks,
+        "passed": packed_tasks,
+        "failed": 0,
+    }
+
+
+def _c_current_pack(
+    decision_state: Dict[str, Any],
+    machine_state: Dict[str, Any],
+) -> Dict[str, Any]:
+    task_uids = [int(uid) for uid in machine_state.get("current_batch_uids", []) or []]
+    rows = _task_rows_for_uids(decision_state, task_uids)
+    metrics = _c_composition_metrics(rows)
+    return {
+        "task_uids": task_uids,
+        "task_codes": [_task_code(uid) for uid in task_uids],
+        **metrics,
+    }
+
+
 def _quality_kpis(series: List[Dict[str, Any]], machine_state: Dict[str, Any]) -> Dict[str, Any]:
     processed = sum(len(point.get("task_uids", [])) for point in series)
     passed = sum(int(point.get("pass_count", 0) or 0) for point in series)
@@ -681,16 +926,45 @@ def _quality_kpis(series: List[Dict[str, Any]], machine_state: Dict[str, Any]) -
 def _equipment_detail(equipment_id: str) -> Dict[str, Any]:
     canonical_id = _canonical_equipment_id(equipment_id)
     stage = _stage_from_equipment_id(canonical_id)
-    if stage not in {"A", "B"}:
-        raise HTTPException(
-            status_code=400,
-            detail="machine quality detail is available for APC stages A and B",
-        )
 
     decision_state = context.env.get_decision_state()
     machine_state = decision_state.get(stage, {}).get("machines", {}).get(canonical_id)
     if machine_state is None:
         raise HTTPException(status_code=404, detail=f"unknown equipment: {equipment_id}")
+
+    if stage == "C":
+        pack_series = _c_pack_series(canonical_id, decision_state)
+        current_pack = _c_current_pack(decision_state, machine_state)
+        return {
+            "time": decision_state.get("time", 0),
+            "equipment_id": canonical_id,
+            "stage": stage,
+            "process_label": "Packing / Material Compatibility",
+            "status": str(machine_state.get("status", "UNKNOWN")).upper(),
+            "batch_size": machine_state.get("batch_size"),
+            "current_batch_uids": list(machine_state.get("current_batch_uids", [])),
+            "finish_time": machine_state.get("finish_time"),
+            "material_state": {
+                "primary_key": "material_match",
+                "primary_label": "Material match",
+                "primary_value": current_pack["material_match_count"],
+                "secondary_key": "color_match",
+                "secondary_label": "Color match",
+                "secondary_value": current_pack["color_match_count"],
+                "state_label": current_pack["composition_label"],
+            },
+            "apc": {
+                "goal": "Pack wafers with matching material and color composition",
+                "quality_axis": {"x": "pack", "y": "composition_quality"},
+                "aggregation": "dominant material count and dominant color count over batch size",
+                "recipe_parameters": ["material_type", "color"],
+            },
+            "kpis": _c_pack_kpis(pack_series, machine_state),
+            "pack_series": pack_series,
+            "quality_series": pack_series,
+            "current_pack": current_pack,
+            "recent_assignments": [],
+        }
 
     series = _machine_quality_series(stage, canonical_id)
     process_label = {

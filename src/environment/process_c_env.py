@@ -2,6 +2,7 @@
 """Process C environment (packing/finalization)."""
 
 import warnings
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -258,6 +259,16 @@ class ProcessC_Env:
                 "start_time": start_time,
                 "end_time": current_time,
                 "reason": reason,
+                "avg_quality": float(pack_info["avg_quality"]),
+                "pack_quality": float(pack_info["avg_quality"]),
+                "avg_compat": float(pack_info["avg_compat"]),
+                "avg_wait_time": float(pack_info["avg_wait_time"]),
+                "material_counts": dict(pack_info["material_counts"]),
+                "color_counts": dict(pack_info["color_counts"]),
+                "material_match_count": int(pack_info["material_match_count"]),
+                "color_match_count": int(pack_info["color_match_count"]),
+                "dominant_material": pack_info["dominant_material"],
+                "dominant_color": pack_info["dominant_color"],
             }
         )
 
@@ -437,10 +448,19 @@ class ProcessC_Env:
 
     def _create_pack_info(self, pack: List[Task], current_time: int) -> Dict[str, Any]:
         """Build aggregate metrics for one completed pack."""
-        avg_quality = np.mean([getattr(task, "realized_qa_B", 50) for task in pack])
-        avg_compat = self._compute_compatibility(pack)
+        material_counts = Counter(getattr(task, "material_type", "UNKNOWN") for task in pack)
+        color_counts = Counter(getattr(task, "color", "UNKNOWN") for task in pack)
+        material_match_count = max(material_counts.values()) if material_counts else 0
+        color_match_count = max(color_counts.values()) if color_counts else 0
+        denominator = max(1, len(pack) * 2)
+        avg_quality = ((material_match_count + color_match_count) / denominator) * 100
+        avg_compat = avg_quality / 100
         wait_times = [current_time - getattr(task, "arrival_time", current_time) for task in pack]
         avg_wait = np.mean(wait_times) if wait_times else 0
+        dominant_material = (
+            material_counts.most_common(1)[0][0] if material_counts else "UNKNOWN"
+        )
+        dominant_color = color_counts.most_common(1)[0][0] if color_counts else "UNKNOWN"
 
         return {
             "pack_id": self.pack_count,
@@ -448,6 +468,12 @@ class ProcessC_Env:
             "avg_compat": avg_compat,
             "avg_wait_time": avg_wait,
             "task_count": len(pack),
+            "material_counts": material_counts,
+            "color_counts": color_counts,
+            "material_match_count": material_match_count,
+            "color_match_count": color_match_count,
+            "dominant_material": dominant_material,
+            "dominant_color": dominant_color,
         }
 
     def _update_stats(self, pack_info: Dict[str, Any]):

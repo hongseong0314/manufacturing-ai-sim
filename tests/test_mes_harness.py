@@ -1,5 +1,9 @@
+from dataclasses import replace
+
+from src.agents.factory import build_mes_policy_stack
 from src.environment.manufacturing_env import ManufacturingEnv
 from src.mes import MESDevelopmentHarness, MESEvaluatorAgent
+from src.mes.services import MESDecisionService
 from src.objects import Task
 
 
@@ -86,6 +90,285 @@ def _build_c_group_env():
     ]
     env.env_C.add_tasks(tasks, current_time=0)
     return env
+
+
+def _build_multi_stage_budget_env():
+    env = ManufacturingEnv(
+        {
+            "num_machines_A": 2,
+            "num_machines_B": 1,
+            "num_machines_C": 1,
+            "batch_size_C": 2,
+            "process_time_A": 1,
+            "process_time_B": 1,
+            "process_time_C": 0,
+            "deterministic_mode": True,
+        }
+    )
+    env.reset(seed_initial_tasks=False, seed=23)
+    env.time = 12
+    env.env_A.add_tasks(
+        [
+            Task(uid=10, job_id="A_LOT_10", due_date=80, spec_a=(45.0, 55.0)),
+            Task(uid=11, job_id="A_LOT_11", due_date=81, spec_a=(45.0, 55.0)),
+        ]
+    )
+    env.env_C.add_tasks(
+        [
+            Task(
+                uid=210,
+                job_id="C_LOT_210",
+                customer_id="ALPHA",
+                material_type="plastic",
+                color="red",
+                due_date=70,
+                spec_a=(45.0, 55.0),
+                realized_qa_B=80.0,
+            ),
+            Task(
+                uid=211,
+                job_id="C_LOT_211",
+                customer_id="ALPHA",
+                material_type="plastic",
+                color="red",
+                due_date=71,
+                spec_a=(45.0, 55.0),
+                realized_qa_B=81.0,
+            ),
+        ],
+        current_time=0,
+    )
+    return env
+
+
+def _build_c_fifo_env():
+    env = ManufacturingEnv(
+        {
+            "num_machines_A": 1,
+            "num_machines_B": 1,
+            "num_machines_C": 1,
+            "batch_size_C": 2,
+            "process_time_A": 1,
+            "process_time_B": 1,
+            "process_time_C": 0,
+            "deterministic_mode": True,
+        }
+    )
+    env.reset(seed_initial_tasks=False, seed=29)
+    env.time = 10
+    env.env_C.add_tasks(
+        [
+            Task(
+                uid=10,
+                job_id="FIFO_10",
+                customer_id="ALPHA",
+                material_type="plastic",
+                color="red",
+                due_date=100,
+                spec_a=(45.0, 55.0),
+                realized_qa_B=50.0,
+            ),
+            Task(
+                uid=11,
+                job_id="FIFO_11",
+                customer_id="BETA",
+                material_type="metal",
+                color="blue",
+                due_date=101,
+                spec_a=(45.0, 55.0),
+                realized_qa_B=55.0,
+            ),
+            Task(
+                uid=12,
+                job_id="FIFO_12",
+                customer_id="ALPHA",
+                material_type="plastic",
+                color="red",
+                due_date=102,
+                spec_a=(45.0, 55.0),
+                realized_qa_B=95.0,
+            ),
+        ],
+        current_time=0,
+    )
+    return env
+
+
+def _build_b_wait_env():
+    env = ManufacturingEnv(
+        {
+            "num_machines_A": 1,
+            "num_machines_B": 1,
+            "num_machines_C": 1,
+            "process_time_A": 1,
+            "process_time_B": 1,
+            "process_time_C": 0,
+            "deterministic_mode": True,
+        }
+    )
+    env.reset(seed_initial_tasks=False, seed=31)
+    env.time = 18
+    env.env_B.add_tasks(
+        [
+            Task(uid=310, job_id="B_LOT_310", due_date=90, spec_a=(45.0, 55.0)),
+            Task(uid=311, job_id="B_LOT_311", due_date=91, spec_a=(45.0, 55.0)),
+        ]
+    )
+    return env
+
+
+class _ForceStageL3Policy:
+    policy_id = "TEST_FORCE_STAGE_L3"
+    model_id = "test-force-stage-l3"
+    model_version = "0.0"
+
+    def __init__(self, stage):
+        self.stage = stage
+
+    def select(
+        self,
+        decision_state,
+        objective_action,
+        candidate_portfolio,
+        target_stage=None,
+    ):
+        candidates = [
+            candidate
+            for candidate in candidate_portfolio
+            if candidate.get("stage") == self.stage
+        ]
+        selected = candidates[0]
+        selected_id = selected["candidate_id"]
+        return {
+            "target_stage": self.stage,
+            "selected_stage": self.stage,
+            "selected_candidate_id": selected_id,
+            "selected_candidate_ids": [selected_id],
+            "selected_group_key": dict(selected.get("group_key", {})),
+            "stage_priorities": {
+                "A": 1.0 if self.stage == "A" else 0.0,
+                "B": 1.0 if self.stage == "B" else 0.0,
+                "C": 1.0 if self.stage == "C" else 0.0,
+            },
+            "dispatch_budgets": {
+                "A": 1 if self.stage == "A" else 0,
+                "B": 1 if self.stage == "B" else 0,
+                "C": 1 if self.stage == "C" else 0,
+            },
+            "budget_candidate_ids": {
+                "A": [selected_id] if self.stage == "A" else [],
+                "B": [selected_id] if self.stage == "B" else [],
+                "C": [selected_id] if self.stage == "C" else [],
+            },
+            "score_components": {"upper_score": 999.0},
+            "constraints": {
+                "max_commands_per_cycle": 1,
+                "select_from_l1_portfolio": True,
+            },
+            "candidate_actions": list(candidate_portfolio),
+            "reasons": [f"forced_{self.stage.lower()}_for_policy_swap_test"],
+        }
+
+
+def test_factory_builds_default_mes_policy_stack_for_fifo_l1_and_rule_l2():
+    stack = build_mes_policy_stack({"batch_size_C": 2})
+
+    assert stack.config["scheduler_A"] == "fifo"
+    assert stack.config["scheduler_B"] == "fifo"
+    assert stack.config["packing_C"] == "fifo"
+    assert stack.config["tuner_A"] == "rule-based"
+    assert stack.config["tuner_B"] == "rule-based"
+    assert stack.config["meta_scheduler_L3"] == "candidate-portfolio-rule"
+    assert stack.config["objective_policy_L4"] == "cycle-weight-rule"
+    assert stack.l1_policy_id == "L1_FIFO_BASELINE"
+    assert stack.l2_policy_id == "L2_RULE_BASED_APC"
+    assert stack.l3_policy_id == "L3_CANDIDATE_PORTFOLIO_RULE"
+    assert stack.l4_policy_id == "L4_CYCLE_WEIGHT_RULE"
+    assert stack.l3_meta_scheduler.policy_id == stack.l3_policy_id
+    assert stack.l4_objective_policy.policy_id == stack.l4_policy_id
+
+
+def test_harness_uses_factory_l3_l4_policy_ids():
+    env = _build_env()
+    harness = MESDevelopmentHarness(config=env.config)
+
+    result = harness.run(env.get_decision_state(), target_stage="A")
+
+    assert result.passed
+    by_layer = _by_layer(result.recommendations)
+    assert by_layer["L4"].policy_id == "L4_CYCLE_WEIGHT_RULE"
+    assert by_layer["L3"].policy_id == "L3_CANDIDATE_PORTFOLIO_RULE"
+    assert by_layer["L3"].model_id == "candidate-portfolio-meta-scheduler"
+    assert by_layer["L4"].model_id == "cycle-weight-objective-policy"
+
+
+def test_fake_l3_policy_can_force_c_candidate_selection():
+    env = _build_multi_stage_budget_env()
+    stack = replace(
+        build_mes_policy_stack(env.config),
+        l3_meta_scheduler=_ForceStageL3Policy("C"),
+        l3_policy_id="TEST_FORCE_STAGE_L3",
+    )
+    harness = MESDevelopmentHarness(service=MESDecisionService(policy_stack=stack))
+
+    result = harness.run(env.get_decision_state())
+
+    assert result.passed
+    by_layer = _by_layer(result.recommendations)
+    assert by_layer["L3"].policy_id == "TEST_FORCE_STAGE_L3"
+    assert by_layer["L3"].recommended_action["selected_stage"] == "C"
+    assert by_layer["L1"].recommended_action["stage"] == "C"
+    assert by_layer["L1"].recommended_action["candidate_id"] == (
+        by_layer["L3"].recommended_action["selected_candidate_id"]
+    )
+
+
+def test_fake_l3_policy_can_force_b_candidate_selection():
+    env = _build_b_wait_env()
+    stack = replace(
+        build_mes_policy_stack(env.config),
+        l3_meta_scheduler=_ForceStageL3Policy("B"),
+        l3_policy_id="TEST_FORCE_STAGE_L3",
+    )
+    harness = MESDevelopmentHarness(service=MESDecisionService(policy_stack=stack))
+
+    result = harness.run(env.get_decision_state())
+
+    assert result.passed
+    by_layer = _by_layer(result.recommendations)
+    assert by_layer["L3"].policy_id == "TEST_FORCE_STAGE_L3"
+    assert by_layer["L3"].recommended_action["selected_stage"] == "B"
+    assert by_layer["L1"].recommended_action["stage"] == "B"
+
+
+def test_harness_uses_factory_fifo_l1_policy_for_c_packing():
+    env = _build_c_fifo_env()
+    service = MESDecisionService(
+        policy_stack=build_mes_policy_stack(
+            {
+                "batch_size_C": 2,
+                "packing_C": "fifo",
+                "mes_l1_C": "fifo",
+                "tuner_A": "rule-based",
+                "tuner_B": "rule-based",
+            }
+        )
+    )
+    harness = MESDevelopmentHarness(service=service)
+
+    result = harness.run(env.get_decision_state(), target_stage="C")
+
+    assert result.passed
+    by_layer = _by_layer(result.recommendations)
+    l1 = by_layer["L1"]
+    l2 = by_layer["L2"]
+    assert l1.policy_id == "L1_FIFO_BASELINE"
+    assert l1.recommended_action["task_uids"] == [10, 11]
+    assert l1.recommended_action["policy_source"]["factory"] == "build_mes_policy_stack"
+    assert l2.policy_id == "L2_RULE_BASED_APC"
+    assert l2.recommended_action["apc_mode"] == "L1L2_COMPOSED"
+    assert l2.recommended_action["policy_source"]["factory"] == "build_mes_policy_stack"
+    assert l2.recommended_action["policy_source"]["l2_policy_id"] == "L2_RULE_BASED_APC"
 
 
 def test_development_harness_runs_connected_l4_l3_l1_l2_chain():
@@ -304,7 +587,7 @@ def test_l2_recipe_composes_apc_fields_for_rule_engine_command():
 
 def test_c_packing_l3_selects_due_customer_from_l1_candidate_portfolio():
     env = _build_c_group_env()
-    harness = MESDevelopmentHarness()
+    harness = MESDevelopmentHarness(config={**env.config, "mes_l1_C": "grouped"})
 
     result = harness.run(env.get_decision_state(), target_stage="C")
 
@@ -332,7 +615,7 @@ def test_c_packing_l3_selects_due_customer_from_l1_candidate_portfolio():
 
 def test_l3_c_packing_candidates_include_l2_annotations_before_selection():
     env = _build_c_group_env()
-    harness = MESDevelopmentHarness()
+    harness = MESDevelopmentHarness(config={**env.config, "mes_l1_C": "grouped"})
 
     result = harness.run(env.get_decision_state(), target_stage="C")
 
@@ -359,6 +642,25 @@ def test_l3_c_packing_candidates_include_l2_annotations_before_selection():
     }
     assert l1_candidate_ids <= l2_candidate_ids
     assert l2.recommended_action["candidate_id"] == l1.recommended_action["candidate_id"]
+
+
+def test_l3_allocates_multi_stage_budgets_from_single_portfolio_pass():
+    env = _build_multi_stage_budget_env()
+    harness = MESDevelopmentHarness(config=env.config)
+
+    plan = harness.planner.plan(env.get_decision_state())
+    action = plan.stage_priority.recommended_action
+
+    assert action["dispatch_budgets"]["A"] == 2
+    assert action["dispatch_budgets"]["C"] == 1
+    assert action["constraints"]["max_commands_per_cycle"] == 3
+    assert len(action["selected_candidate_ids"]) == 3
+    selected_stages = {
+        candidate["stage"]
+        for candidate in plan.candidate_portfolio
+        if candidate["candidate_id"] in action["selected_candidate_ids"]
+    }
+    assert selected_stages == {"A", "C"}
 
 
 def test_rule_engine_rejects_l3_l1_selected_candidate_mismatch():

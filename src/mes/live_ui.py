@@ -182,6 +182,12 @@ LIVE_MES_HTML = """
     .chain-node { border: 1px solid var(--border); border-left: 4px solid var(--purple); border-radius: 6px; padding: 10px; }
     .chain-node strong { display: block; font-size: 13px; margin-bottom: 6px; }
     .chain-node div { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .trace-grid { display: grid; gap: 10px; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 12px; }
+    .trace-card { border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+    .trace-card strong { display: block; font-size: 12px; margin-bottom: 6px; text-transform: uppercase; }
+    .trace-card code, .trace-card span { color: var(--muted); font-size: 11px; }
+    .candidate-list { display: grid; gap: 6px; margin-top: 8px; }
+    .candidate-item { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 4px; padding: 7px; }
     .event-row { border-bottom: 1px solid var(--border); display: grid; gap: 10px; grid-template-columns: 96px 1fr auto; padding: 10px 0; }
     .event-row:last-child { border-bottom: 0; }
     .event-row b { display: block; font-size: 13px; }
@@ -405,6 +411,7 @@ LIVE_MES_HTML = """
           <button class="button" id="stop">Stop</button>
           <button class="button" id="step">Run cycle</button>
           <button class="button" id="generate">Generate lot</button>
+          <button class="button" id="reset">Reset</button>
         </div>
       </header>
       <div class="layout">
@@ -456,6 +463,7 @@ LIVE_MES_HTML = """
           </div>
           <div class="panel" id="chain">
             <div class="panel-header"><h2>Decision Chain</h2><span id="chain-count">0 records</span></div>
+            <div class="trace-grid" id="chain-trace"></div>
             <div class="chain" id="chain-list"></div>
           </div>
         </section>
@@ -475,12 +483,12 @@ LIVE_MES_HTML = """
           <div class="panel-header">
             <h2>Machine Detail</h2>
             <div class="header-actions">
-              <span id="machine-subtitle">Select an A/B machine</span>
+              <span id="machine-subtitle">Select an A/B/C machine</span>
               <button class="button" id="machine-back" type="button">Back to equipment</button>
             </div>
           </div>
           <div class="empty-state" id="machine-empty">
-            A/B equipment rows open an APC quality trend, recipe snapshot, and material state history.
+            Equipment rows open APC quality trends for A/B and packing composition quality for C.
           </div>
           <div class="machine-content" id="machine-content" hidden>
             <div class="machine-kpi-grid" id="machine-kpis"></div>
@@ -598,7 +606,7 @@ LIVE_MES_HTML = """
       document.getElementById("equipment-count").textContent = `${items.length} tools`;
       document.getElementById("nav-eqp").textContent = String(items.length);
       document.getElementById("equipment-body").innerHTML = items.map(eq => {
-        const detailEnabled = ["A", "B"].includes(String(eq.stage || "").toUpperCase());
+        const detailEnabled = ["A", "B", "C"].includes(String(eq.stage || "").toUpperCase());
         const equipmentCell = detailEnabled
           ? `<button class="link-button machine-link" type="button" data-equipment-id="${escapeText(eq.equipment_id)}"><code>${escapeText(eq.equipment_id)}</code></button>`
           : `<code>${escapeText(eq.equipment_id)}</code>`;
@@ -647,10 +655,10 @@ LIVE_MES_HTML = """
       } catch (error) {
         selectedMachineDetail = null;
         document.getElementById("nav-machine").textContent = "-";
-        document.getElementById("machine-subtitle").textContent = "A/B detail unavailable";
+        document.getElementById("machine-subtitle").textContent = "Machine detail unavailable";
         empty.hidden = false;
         content.hidden = true;
-        empty.textContent = "Machine detail is available for A/B APC equipment.";
+        empty.textContent = "Machine detail is available after the equipment exists in the live simulator state.";
       }
     }
 
@@ -672,6 +680,27 @@ LIVE_MES_HTML = """
     function renderMachineKpis(detail) {
       const k = detail.kpis || {};
       const material = detail.material_state || {};
+      if (detail.stage === "C") {
+        const currentBatch = formatTaskList(detail.current_batch_uids || []) || "-";
+        const items = [
+          ["Status", detail.status || "-", `finish t=${detail.finish_time ?? "-"}`],
+          ["Pack Quality", formatMetric(k.avg_quality), `${k.packs_completed || 0} packs`],
+          ["Latest", formatMetric(k.latest_quality), "composition quality"],
+          ["Compatibility", formatMetric(k.avg_compatibility), "same material/color"],
+          ["Packed", k.packed_tasks ?? 0, `active ${k.active_wip || 0}`],
+          [material.primary_label || "Material match", material.primary_value ?? 0, material.state_label || "-"],
+        ];
+        document.getElementById("machine-kpis").innerHTML = items.map(item => `
+          <div class="metric">
+            <span>${escapeText(item[0])}</span>
+            <b>${escapeText(item[1])}</b>
+            <div class="kpi-note">${escapeText(item[2])}</div>
+          </div>`).join("");
+        if (currentBatch !== "-") {
+          document.getElementById("machine-subtitle").textContent += ` · running ${currentBatch}`;
+        }
+        return;
+      }
       const yieldPct = `${Math.round((k.yield_rate ?? 1) * 100)}%`;
       const currentBatch = formatTaskList(detail.current_batch_uids || []) || "-";
       const items = [
@@ -697,7 +726,7 @@ LIVE_MES_HTML = """
       const series = detail.quality_series || [];
       const target = document.getElementById("quality-chart");
       if (!series.length) {
-        target.innerHTML = "<div class='empty-state'>No completed A/B quality samples yet.</div>";
+        target.innerHTML = `<div class='empty-state'>No completed ${detail.stage === "C" ? "C packs" : "A/B quality samples"} yet.</div>`;
         renderPointDetail(null, detail);
         return;
       }
@@ -734,7 +763,7 @@ LIVE_MES_HTML = """
         ? selectedPointId
         : series[series.length - 1].point_id;
       selectedPointId = selected;
-      const latestWindow = series[series.length - 1].target_window;
+      const latestWindow = detail.stage === "C" ? null : series[series.length - 1].target_window;
       const targetBand = latestWindow
         ? `<rect class="target-band" x="${margin.left}" y="${y(latestWindow[1])}" width="${plotW}" height="${Math.max(1, y(latestWindow[0]) - y(latestWindow[1]))}"></rect>
            <line class="target-line" x1="${margin.left}" x2="${width - margin.right}" y1="${y(latestWindow[0])}" y2="${y(latestWindow[0])}"></line>
@@ -749,11 +778,13 @@ LIVE_MES_HTML = """
         <path class="chart-line" d="${path}"></path>
         ${series.map(point => {
           const cls = point.point_id === selected ? "selected" : (point.passed ? "pass" : "fail");
-          const title = `${point.equipment_id} t=${point.time} qa=${formatMetric(point.quality)} ${point.recipe_label} ${point.material_state?.state_label || ""}`;
+          const title = detail.stage === "C"
+            ? `${point.equipment_id} pack ${point.pack_id} quality=${formatMetric(point.quality)} ${point.composition_label || ""}`
+            : `${point.equipment_id} t=${point.time} qa=${formatMetric(point.quality)} ${point.recipe_label} ${point.material_state?.state_label || ""}`;
           return `<circle class="chart-point ${cls}" cx="${x(point.step ?? point.time)}" cy="${y(point.quality)}" r="6" data-point-id="${escapeText(point.point_id)}"><title>${escapeText(title)}</title></circle>`;
         }).join("")}
-        <text class="chart-text" x="${width / 2}" y="${height - 2}" text-anchor="middle">step</text>
-        <text class="chart-text" x="16" y="${height / 2}" transform="rotate(-90 16 ${height / 2})" text-anchor="middle">quality</text>
+        <text class="chart-text" x="${width / 2}" y="${height - 2}" text-anchor="middle">${detail.stage === "C" ? "pack" : "step"}</text>
+        <text class="chart-text" x="16" y="${height / 2}" transform="rotate(-90 16 ${height / 2})" text-anchor="middle">${detail.stage === "C" ? "composition quality" : "quality"}</text>
       </svg>`;
       target.querySelectorAll(".chart-point").forEach(point => {
         point.onclick = () => {
@@ -769,6 +800,22 @@ LIVE_MES_HTML = """
       if (!point) {
         document.getElementById("point-title").textContent = "empty";
         target.innerHTML = "<span class='kpi-note'>Run the line until this machine completes a task.</span>";
+        return;
+      }
+      if (detail.stage === "C") {
+        const materialCounts = formatCounts(point.material_counts || {});
+        const colorCounts = formatCounts(point.color_counts || {});
+        document.getElementById("point-title").textContent = `pack ${point.pack_id} · ${formatTaskList(point.task_uids)}`;
+        target.innerHTML = `
+          <strong>${escapeText(detail.equipment_id)} pack quality ${escapeText(formatMetric(point.quality))}</strong>
+          <dl>
+            <dt>Tasks</dt><dd><code>${escapeText(formatTaskList(point.task_uids) || "-")}</code></dd>
+            <dt>Material</dt><dd>${escapeText(materialCounts || "-")}</dd>
+            <dt>Color</dt><dd>${escapeText(colorCounts || "-")}</dd>
+            <dt>Dominant</dt><dd>${escapeText(point.composition_label || "-")}</dd>
+            <dt>Match</dt><dd>${escapeText(`${point.material_match_count || 0} material / ${point.color_match_count || 0} color`)}</dd>
+            <dt>Wait</dt><dd>${escapeText(formatMetric(point.avg_wait_time))}</dd>
+          </dl>`;
         return;
       }
       document.getElementById("point-title").textContent = `t=${point.time} · ${formatTaskList(point.task_uids)}`;
@@ -791,14 +838,15 @@ LIVE_MES_HTML = """
           <td>t=${point.time}</td>
           <td><code>${escapeText(formatTaskList(point.task_uids) || "-")}</code></td>
           <td>${escapeText(formatMetric(point.quality))}</td>
-          <td>${escapeText(point.recipe_label || "-")}</td>
-          <td>${escapeText(point.material_state?.state_label || "-")}</td>
+          <td>${escapeText(detail.stage === "C" ? `P${point.pack_id}` : (point.recipe_label || "-"))}</td>
+          <td>${escapeText(detail.stage === "C" ? (point.composition_label || "-") : (point.material_state?.state_label || "-"))}</td>
           <td><span class="${statusClass(point.passed ? "PASS" : "FAIL")}">${point.passed ? "PASS" : "FAIL"}</span></td>
         </tr>`).join("") || "<tr><td colspan='6'>No completed samples</td></tr>";
     }
 
     function renderChain(chain) {
       const recs = chain.recommendations || [];
+      renderTraceability(chain.traceability || {});
       document.getElementById("chain-count").textContent = `${recs.length} recommendations`;
       document.getElementById("chain-list").innerHTML = recs.map(r => `
         <article class="chain-node">
@@ -808,6 +856,42 @@ LIVE_MES_HTML = """
           <div>feature <code>${r.feature_snapshot_id || "-"}</code></div>
           <div>status <span class="${statusClass(r.rule_validation_status)}">${r.rule_validation_status}</span></div>
         </article>`).join("") || "<span class='kpi-note'>No active chain</span>";
+    }
+
+    function renderTraceability(trace) {
+      const budgets = trace.dispatch_budgets || {};
+      const selected = trace.selected_candidates || [];
+      const annotations = trace.l2_annotations || [];
+      const budgetText = ["A", "B", "C"]
+        .map(stage => `${stage}:${budgets[stage] || 0}`)
+        .join(" / ");
+      const candidateRows = selected.slice(0, 4).map(candidate => {
+        const group = candidate.group_key || {};
+        const annotation = candidate.l2_annotation || {};
+        return `<div class="candidate-item">
+          <code>${escapeText(candidate.candidate_id || "-")}</code>
+          <span>${escapeText(candidate.stage || "-")} · ${escapeText(group.customer_id || "-")} · score ${escapeText(formatMetric(candidate.upper_score ?? candidate.local_score))}</span>
+          <span>L2 ${escapeText(annotation.quality_risk || annotation.recipe_id || "-")}</span>
+        </div>`;
+      }).join("");
+      document.getElementById("chain-trace").innerHTML = `
+        <div class="trace-card">
+          <strong>Budget Plan</strong>
+          <code>${escapeText(budgetText)}</code>
+          <span>L4 ${escapeText(trace.l4_policy_id || "-")}</span>
+          <span>L3 ${escapeText(trace.l3_policy_id || "-")}</span>
+          <span>max ${escapeText(trace.selected_candidate_ids?.length || 0)} commands</span>
+        </div>
+        <div class="trace-card">
+          <strong>Candidate Portfolio</strong>
+          <code>${escapeText(trace.candidate_count || 0)} candidates</code>
+          <div class="candidate-list">${candidateRows || "<span>No selected candidates</span>"}</div>
+        </div>
+        <div class="trace-card">
+          <strong>L2 Annotations</strong>
+          <code>${escapeText(annotations.length)} annotations</code>
+          <span>selected ${escapeText(trace.selected_candidate_id || "-")}</span>
+        </div>`;
     }
 
     function renderEvents(events) {
@@ -899,6 +983,7 @@ LIVE_MES_HTML = """
             <div class="gantt-lane">${nowLine}${rowBars}</div>`;
         }).join("")}
       </div></div>`;
+      attachGanttBarHandlers(target);
     }
 
     function barHtml(bar, horizon) {
@@ -919,7 +1004,13 @@ LIVE_MES_HTML = """
       const top = stackSize > 1 ? 6 + stackIndex * (height + gap) : 10;
       const batchLabel = bar.batch_id !== null && bar.batch_id !== undefined ? ` batch=${bar.batch_id}` : "";
       const title = `${bar.machine_id} t=${bar.start}→${bar.end}${batchLabel} tasks=${batchUids}`;
-      return `<span class="gantt-bar ${cls}" style="left:${left}%;width:${width}%;top:${top}px;height:${height}px;" title="${escapeText(title)}">${escapeText(bar.label || uids || bar.status)}</span>`;
+      return `<span class="gantt-bar ${cls} selectable-gantt-bar" data-machine-id="${escapeText(bar.machine_id)}" data-stage="${escapeText(bar.stage)}" data-task-uids="${escapeText((bar.task_uids || []).join(","))}" data-batch-uids="${escapeText((bar.batch_task_uids || bar.task_uids || []).join(","))}" style="left:${left}%;width:${width}%;top:${top}px;height:${height}px;" title="${escapeText(title)}">${escapeText(bar.label || uids || bar.status)}</span>`;
+    }
+
+    function attachGanttBarHandlers(target) {
+      target.querySelectorAll(".selectable-gantt-bar[data-machine-id]").forEach(bar => {
+        bar.onclick = () => openMachineDetail(bar.dataset.machineId);
+      });
     }
 
     function barVisualClass(bar) {
@@ -987,6 +1078,12 @@ LIVE_MES_HTML = """
       return fmt.format(Number(value));
     }
 
+    function formatCounts(counts) {
+      return Object.entries(counts || {})
+        .map(([key, value]) => `${key}:${value}`)
+        .join(" / ");
+    }
+
     function formatTargetWindow(window) {
       if (!Array.isArray(window) || window.length < 2) return "-";
       return `${formatMetric(window[0])} – ${formatMetric(window[1])}`;
@@ -1023,6 +1120,12 @@ LIVE_MES_HTML = """
     };
     document.getElementById("generate").onclick = async () => {
       await postJSON("/api/v2/tasks/generate", {});
+      refresh(0);
+    };
+    document.getElementById("reset").onclick = async () => {
+      running = false;
+      selectedPointId = null;
+      await postJSON("/api/v2/simulation/reset", {});
       refresh(0);
     };
     document.getElementById("machine-back").onclick = () => {

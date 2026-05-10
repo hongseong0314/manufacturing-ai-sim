@@ -174,63 +174,84 @@ class MESPlannerAgent:
             raw_portfolio,
         )
 
-        objective_action = self._select_objective_action(decision_state, trigger_due)
-        selected_candidate = self._select_portfolio_candidate(
-            portfolio,
-            objective_action,
-            target_stage=target_stage,
+        policy_stack = self.service.policy_stack
+        l4_policy = policy_stack.l4_objective_policy
+        l3_policy = policy_stack.l3_meta_scheduler
+        objective_action = l4_policy.select_objective(
+            decision_state,
+            trigger_due=trigger_due,
+            previous_action=self._last_objective_action,
+            previous_objective_id=self._last_objective_id,
         )
-        resolved_stage = (
-            target_stage
-            or (selected_candidate or {}).get("stage")
-            or self._select_stage(decision_state, portfolio)
+        l3_selection = dict(
+            l3_policy.select(
+                decision_state,
+                objective_action,
+                portfolio,
+                target_stage=target_stage,
+            )
+        )
+        selected_candidate_ids = [
+            str(candidate_id)
+            for candidate_id in l3_selection.get("selected_candidate_ids", [])
+        ]
+        selected_candidate_id = l3_selection.get("selected_candidate_id")
+        if not selected_candidate_id and selected_candidate_ids:
+            selected_candidate_id = selected_candidate_ids[0]
+        resolved_stage = str(
+            l3_selection.get("target_stage")
+            or l3_selection.get("selected_stage")
+            or target_stage
+            or "A"
         ).upper()
+        selected_stage = str(l3_selection.get("selected_stage") or resolved_stage).upper()
+        selected_group_key = dict(l3_selection.get("selected_group_key") or {})
+        stage_priorities = dict(l3_selection.get("stage_priorities") or {})
+        dispatch_budgets = dict(l3_selection.get("dispatch_budgets") or {})
+        budget_candidate_ids = dict(l3_selection.get("budget_candidate_ids") or {})
+        score_components = dict(l3_selection.get("score_components") or {})
+        constraints = dict(l3_selection.get("constraints") or {})
+        constraints.setdefault("max_commands_per_cycle", len(selected_candidate_ids))
+        constraints.setdefault("select_from_l1_portfolio", True)
+        l3_candidate_actions = list(l3_selection.get("candidate_actions") or [])
 
         l4_snapshot = self.service.create_feature_snapshot(
             decision_state,
             layer_id="L4",
             correlation_id=resolved_correlation_id,
-            features=self._objective_features(decision_state, trigger_due),
+            features={
+                **self._objective_features(decision_state, trigger_due),
+                "l4_policy_id": policy_stack.l4_policy_id,
+            },
+        )
+        objective_candidate_actions = (
+            l4_policy.candidate_actions()
+            if callable(getattr(l4_policy, "candidate_actions", None))
+            else [
+                {"objective_id": "OBJ_THROUGHPUT_FIRST"},
+                {"objective_id": "OBJ_YIELD_FIRST"},
+                {"objective_id": "OBJ_RULE_ONLY_BALANCED"},
+            ]
         )
         objective = create_recommendation(
             recommendation_type="OBJECTIVE",
             layer_id="L4",
             objective_id=objective_action["objective_id"],
-            policy_id="PLANNER_RULE_ONLY_BASELINE",
-            model_id="mes-planner",
-            model_version="0.1.0",
+            policy_id=policy_stack.l4_policy_id,
+            model_id=getattr(l4_policy, "model_id", "mes-l4-objective-policy"),
+            model_version=getattr(l4_policy, "model_version", "0.1.0"),
             feature_snapshot_id=l4_snapshot.feature_snapshot_id,
             correlation_id=resolved_correlation_id,
-            candidate_actions=[
-                {"objective_id": "OBJ_THROUGHPUT_FIRST"},
-                {"objective_id": "OBJ_YIELD_FIRST"},
-                {"objective_id": "OBJ_RULE_ONLY_BALANCED"},
-            ],
+            candidate_actions=objective_candidate_actions,
             recommended_action=objective_action,
             score=1.0,
             confidence=1.0,
-            reasons=[
+            reasons=objective_action.get("reasons") or [
                 "objective_trigger_due"
                 if trigger_due
                 else "objective_reused_until_next_trigger"
             ],
         )
-
-        if selected_candidate is None and target_stage is not None:
-            selected_candidate = self._select_portfolio_candidate(
-                portfolio,
-                objective_action,
-                target_stage=resolved_stage,
-            )
-
-        stage_priorities = self._stage_priorities(
-            portfolio,
-            objective_action,
-            selected_stage=resolved_stage,
-        )
-        selected_group_key = dict((selected_candidate or {}).get("group_key", {}))
-        selected_candidate_id = (selected_candidate or {}).get("candidate_id")
-        score_components = self._score_components(selected_candidate, objective_action)
         l3_snapshot = self.service.create_feature_snapshot(
             decision_state,
             layer_id="L3",
@@ -240,8 +261,12 @@ class MESPlannerAgent:
                 "target_stage": resolved_stage,
                 "candidate_count": len(portfolio),
                 "selected_candidate_id": selected_candidate_id,
+                "selected_candidate_ids": selected_candidate_ids,
                 "selected_group_key": selected_group_key,
+                "dispatch_budgets": dispatch_budgets,
+                "budget_candidate_ids": budget_candidate_ids,
                 "objective_id": objective_action["objective_id"],
+                "l3_policy_id": policy_stack.l3_policy_id,
                 "task_generation_trigger_due": trigger_due,
             },
         )
@@ -249,29 +274,29 @@ class MESPlannerAgent:
             recommendation_type="STAGE_PRIORITY",
             layer_id="L3",
             objective_id=objective.objective_id,
-            policy_id="PLANNER_STAGE_PRIORITY_BASELINE",
-            model_id="mes-planner",
-            model_version="0.1.0",
+            policy_id=policy_stack.l3_policy_id,
+            model_id=getattr(l3_policy, "model_id", "mes-l3-meta-scheduler"),
+            model_version=getattr(l3_policy, "model_version", "0.1.0"),
             feature_snapshot_id=l3_snapshot.feature_snapshot_id,
             correlation_id=resolved_correlation_id,
             parent_recommendation_id=objective.recommendation_id,
-            candidate_actions=self._l3_candidate_actions(portfolio, objective_action),
+            candidate_actions=l3_candidate_actions,
             recommended_action={
                 "target_stage": resolved_stage,
-                "selected_stage": resolved_stage,
+                "selected_stage": selected_stage,
                 "selected_candidate_id": selected_candidate_id,
+                "selected_candidate_ids": selected_candidate_ids,
                 "selected_group_key": selected_group_key,
                 "stage_priorities": stage_priorities,
+                "dispatch_budgets": dispatch_budgets,
+                "budget_candidate_ids": budget_candidate_ids,
                 "score_components": score_components,
-                "constraints": {
-                    "max_commands_per_cycle": 1,
-                    "select_from_l1_portfolio": True,
-                },
+                "constraints": constraints,
                 "task_generation_trigger_due": trigger_due,
             },
             score=1.0,
             confidence=1.0,
-            reasons=[
+            reasons=l3_selection.get("reasons") or [
                 "first_stage_with_rule_eligible_candidates"
                 if trigger_due
                 else "stage_priority_maintained_until_next_trigger"
@@ -290,131 +315,6 @@ class MESPlannerAgent:
             candidate_portfolio=portfolio,
         )
 
-    def _select_stage(
-        self,
-        decision_state: Dict[str, Any],
-        candidate_portfolio: Optional[List[Dict[str, Any]]] = None,
-    ) -> str:
-        if candidate_portfolio:
-            return str(candidate_portfolio[0].get("stage", "A") or "A")
-        for stage in ("A", "B", "C"):
-            if self.service.dispatch_candidates(decision_state, stage=stage):
-                return stage
-        return "A"
-
-    def _select_portfolio_candidate(
-        self,
-        candidate_portfolio: List[Dict[str, Any]],
-        objective_action: Dict[str, Any],
-        target_stage: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
-        candidates = [
-            candidate
-            for candidate in candidate_portfolio
-            if target_stage is None
-            or str(candidate.get("stage", "")).upper() == str(target_stage).upper()
-        ]
-        if not candidates:
-            return None
-        return max(
-            candidates,
-            key=lambda candidate: (
-                self._upper_score(candidate, objective_action),
-                float(candidate.get("local_score", 0.0) or 0.0),
-                -int(candidate.get("local_rank", 0) or 0),
-            ),
-        )
-
-    def _stage_priorities(
-        self,
-        candidate_portfolio: List[Dict[str, Any]],
-        objective_action: Dict[str, Any],
-        selected_stage: str,
-    ) -> Dict[str, float]:
-        scores = {stage: 0.0 for stage in ("A", "B", "C")}
-        for candidate in candidate_portfolio:
-            stage = str(candidate.get("stage", "")).upper()
-            if stage not in scores:
-                continue
-            scores[stage] = max(scores[stage], self._upper_score(candidate, objective_action))
-        max_score = max(scores.values()) if scores else 0.0
-        if max_score <= 0:
-            return {
-                stage: 1.0 if stage == selected_stage else 0.0
-                for stage in ("A", "B", "C")
-            }
-        return {
-            stage: round(score / max_score, 4)
-            for stage, score in scores.items()
-        }
-
-    def _l3_candidate_actions(
-        self,
-        candidate_portfolio: List[Dict[str, Any]],
-        objective_action: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
-        actions = []
-        for candidate in candidate_portfolio:
-            action = dict(candidate)
-            action["upper_score"] = round(
-                self._upper_score(candidate, objective_action),
-                4,
-            )
-            actions.append(action)
-        return actions
-
-    def _upper_score(
-        self,
-        candidate: Dict[str, Any],
-        objective_action: Dict[str, Any],
-    ) -> float:
-        features = dict(candidate.get("features", {}) or {})
-        annotation = dict(candidate.get("l2_annotation", {}) or {})
-        weights = dict(objective_action.get("weights", {}) or {})
-        local_score = float(candidate.get("local_score", 0.0) or 0.0)
-        due_pressure = float(features.get("due_date_pressure", 0.0) or 0.0)
-        batch_size = float(features.get("batch_size", 1.0) or 1.0)
-        margin_value = float(features.get("margin_value", 0.0) or 0.0)
-        throughput_weight = float(weights.get("throughput", 1.0) or 1.0)
-        tardiness_weight = float(weights.get("tardiness", 0.5) or 0.5)
-        customer_weight = float(weights.get("customer_priority", 1.0) or 1.0)
-        quality_risk_penalty = {
-            "LOW": 0.0,
-            "MEDIUM": 8.0,
-            "HIGH": 25.0,
-        }.get(str(annotation.get("quality_risk", "LOW")).upper(), 0.0)
-        return (
-            local_score
-            + tardiness_weight * due_pressure * 10.0
-            + throughput_weight * batch_size
-            + customer_weight * margin_value * 5.0
-            - quality_risk_penalty
-        )
-
-    def _score_components(
-        self,
-        selected_candidate: Optional[Dict[str, Any]],
-        objective_action: Dict[str, Any],
-    ) -> Dict[str, float]:
-        if selected_candidate is None:
-            return {
-                "local_candidate_score": 0.0,
-                "due_date_pressure": 0.0,
-                "upper_score": 0.0,
-            }
-        features = dict(selected_candidate.get("features", {}) or {})
-        return {
-            "local_candidate_score": float(
-                selected_candidate.get("local_score", 0.0) or 0.0
-            ),
-            "due_date_pressure": float(features.get("due_date_pressure", 0.0) or 0.0),
-            "wip_pressure": float(features.get("batch_size", 0.0) or 0.0),
-            "upper_score": round(
-                self._upper_score(selected_candidate, objective_action),
-                4,
-            ),
-        }
-
     def _objective_features(
         self,
         decision_state: Dict[str, Any],
@@ -428,70 +328,6 @@ class MESPlannerAgent:
             "task_generation_trigger_due": trigger_due,
             "planning_interval": self.planning_interval,
         }
-
-    def _select_objective_action(
-        self,
-        decision_state: Dict[str, Any],
-        trigger_due: bool,
-    ) -> Dict[str, Any]:
-        if not trigger_due and self._last_objective_action:
-            return copy.deepcopy(self._last_objective_action)
-
-        mes_state = self.service.decision_state_to_mes(decision_state)
-        kpis = mes_state.get("kpis", {})
-        tardiness = float(kpis.get("tardiness", 0.0) or 0.0)
-        wait_total = 0
-        for stage in ("A", "B", "C"):
-            wait_total += len(decision_state.get(stage, {}).get("wait_pool_uids", []))
-        due_pressure = self._due_date_pressure(decision_state)
-
-        if tardiness > 0 or due_pressure > 0:
-            return {
-                "objective_id": "OBJ_DUE_DATE_RECOVERY",
-                "weights": {
-                    "throughput": 0.8,
-                    "yield": 1.0,
-                    "tardiness": 1.4,
-                    "cost": 0.2,
-                    "customer_priority": 1.2,
-                },
-            }
-        if wait_total >= 10:
-            return {
-                "objective_id": "OBJ_THROUGHPUT_FIRST",
-                "weights": {
-                    "throughput": 1.4,
-                    "yield": 0.9,
-                    "tardiness": 0.7,
-                    "cost": 0.2,
-                },
-            }
-        return {
-            "objective_id": self._last_objective_id,
-            "weights": {
-                "throughput": 1.0,
-                "yield": 1.0,
-                "tardiness": 0.5,
-                "cost": 0.2,
-                "customer_priority": 1.0,
-            },
-        }
-
-    def _due_date_pressure(self, decision_state: Dict[str, Any]) -> float:
-        now = int(decision_state.get("time", 0) or 0)
-        pressure = 0.0
-        tasks = decision_state.get("tasks", {})
-        if not isinstance(tasks, dict):
-            return pressure
-        for row in tasks.values():
-            if not isinstance(row, dict):
-                continue
-            try:
-                due_date = int(row.get("due_date", now))
-            except (TypeError, ValueError):
-                continue
-            pressure = max(pressure, float(now - due_date))
-        return max(0.0, pressure)
 
 
 class MESGeneratorAgent:
@@ -546,7 +382,7 @@ class MESGeneratorAgent:
             recommendation_type="DISPATCH" if plan.target_stage != "C" else "PACK",
             layer_id="L1",
             objective_id=plan.objective.objective_id,
-            policy_id="GENERATOR_RULE_ONLY_DISPATCH",
+            policy_id=self.service.policy_stack.l1_policy_id,
             model_id="mes-generator",
             model_version="0.1.0",
             feature_snapshot_id=l1_snapshot.feature_snapshot_id,
@@ -586,7 +422,7 @@ class MESGeneratorAgent:
             recommendation_type="RECIPE",
             layer_id="L2",
             objective_id=plan.objective.objective_id,
-            policy_id="GENERATOR_DEFAULT_RECIPE",
+            policy_id=self.service.policy_stack.l2_policy_id,
             model_id="mes-generator",
             model_version="0.1.0",
             feature_snapshot_id=l2_snapshot.feature_snapshot_id,
@@ -727,31 +563,11 @@ class MESGeneratorAgent:
         decision_state: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         action = dispatch_action or {}
-        candidate_id = action.get("candidate_id")
-        if stage == "A":
-            return self._recipe_action_a(action, decision_state or {})
-        if stage == "B":
-            return {
-                "candidate_id": candidate_id,
-                "recipe_id": "SIM_B_DEFAULT",
-                "recipe": [50.0, 50.0, 30.0],
-                "parameters": {"chem_a": 50.0, "chem_b": 50.0, "time": 30.0},
-                "replace_solution": False,
-                "apc_mode": "L1L2_COMPOSED",
-            }
-        features = dict(action.get("features", {}) or {})
-        compatibility = float(features.get("compatibility", 0.0) or 0.0)
-        return {
-            "candidate_id": candidate_id,
-            "recipe_id": "SIM_C_NO_RECIPE",
-            "recipe": [],
-            "apc_mode": "L1L2_COMPOSED",
-            "pack_quality_prediction": features.get("avg_quality"),
-            "compatibility": compatibility,
-            "pack_mode": "STANDARD",
-            "quality_risk": "LOW" if compatibility >= 0.8 else "MEDIUM",
-            "selection_reason": "c_pack_process_annotation_for_selected_candidate",
-        }
+        return self.service.process_action_for_selected_candidate(
+            decision_state or {},
+            stage,
+            action,
+        )
 
     def _recipe_action_a(
         self,
@@ -1104,8 +920,9 @@ class MESDevelopmentHarness:
         generator: Optional[MESGeneratorAgent] = None,
         evaluator: Optional[MESEvaluatorAgent] = None,
         store: Optional[InMemoryMESStore] = None,
+        config: Optional[Dict[str, Any]] = None,
     ):
-        self.service = service or MESDecisionService()
+        self.service = service or MESDecisionService(config=config)
         self.planner = planner or MESPlannerAgent(self.service)
         self.generator = generator or MESGeneratorAgent(self.service)
         self.evaluator = evaluator or MESEvaluatorAgent()
@@ -1116,11 +933,13 @@ class MESDevelopmentHarness:
         decision_state: Dict[str, Any],
         target_stage: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        candidate_portfolio: Optional[List[Dict[str, Any]]] = None,
     ) -> HarnessRunResult:
         plan = self.planner.plan(
             decision_state,
             target_stage=target_stage,
             correlation_id=correlation_id,
+            candidate_portfolio=candidate_portfolio,
         )
         generated = self.generator.generate(decision_state, plan)
         pre_evaluation = self.evaluator.evaluate(generated)

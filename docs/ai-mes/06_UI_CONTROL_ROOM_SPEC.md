@@ -1,7 +1,7 @@
 # UI Control Room Specification
 
 Status: canonical  
-Last updated: 2026-05-06
+Last updated: 2026-05-10
 
 ## Purpose
 
@@ -199,14 +199,15 @@ Current implementation:
 
 - `/mes` route serves `LIVE_MES_HTML` from `src/mes/live_ui.py`.
 - UI polls live endpoints.
-- It already shows WIP, equipment, decision chain, events, Gantt, autoplay, and
-  A/B machine quality detail.
+- It already shows WIP, equipment, decision chain, events, Gantt, autoplay,
+  reset, A/B machine quality detail, C machine packing detail, L3 budget plan,
+  selected candidates, L2 annotations, and L3/L4 policy ids.
 
 Current limitations:
 
-- It does not yet show bottom-up candidate portfolios.
-- It does not yet distinguish L3/L4 group selection from L1 final pack choice.
-- C machine detail is not implemented.
+- It shows selected candidate portfolio rows but not the full unselected
+  bottom-up portfolio as a standalone workbench.
+- It only lightly distinguishes L3/L4 group selection from L1 final pack choice.
 - Genealogy view is not implemented.
 - Operator approval workflows are not implemented.
 
@@ -214,12 +215,13 @@ Current limitations:
 
 Next UI milestone:
 
-1. Add Candidate Portfolio panel for C packing.
+1. Add a full Candidate Portfolio panel for C packing and A/B dispatch.
 2. Show group-level rows: customer/product/material/due-date group.
 3. Show local candidate score vs upper-layer weighted score.
 4. Show selected group separately from selected pack.
-5. Add Rule Engine consistency checks for selected group/candidate.
-6. Add C machine detail: pack composition, compatibility, queue age, pack id.
+5. Add operator-facing Rule Engine consistency and rejection detail.
+6. Add runtime experiment preset controls for balanced/A-bottleneck/B-bottleneck
+   batch scenarios.
 
 ## UX Copy Rules
 
@@ -253,4 +255,3 @@ Avoid vague phrases:
 | Event timeline | `/api/v1/events` | same plus simulator event linkage |
 | Gantt | `/api/v2/gantt` | same |
 | Machine detail | `/api/v2/equipment/{id}/detail` | A/B/C detail coverage |
-

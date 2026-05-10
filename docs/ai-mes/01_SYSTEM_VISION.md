@@ -1,7 +1,7 @@
 # System Vision
 
 Status: canonical  
-Last updated: 2026-05-06
+Last updated: 2026-05-10
 
 ## Goal
 
@@ -112,27 +112,31 @@ decision chain correct, inspectable, and testable.
 
 ## Current State
 
-The repository already has a working simulator and an MES shell. The main gap is
-architectural precision in the AI decision flow.
-
-Current implementation:
+The repository already has a working simulator and a simulator-backed MES shell.
+The current MES path follows the two-pass layered decision flow:
 
 ```text
-MESPlannerAgent:
-  creates L4 objective and L3 stage priority
-
-MESGeneratorAgent:
-  creates L1 dispatch/pack and L2 recipe recommendation
-
-MESRuleEngine:
-  validates L1/L2 and emits validated command
-
-MESDevelopmentHarness:
-  stores the chain and optionally steps the simulator
+L1 candidate portfolio
+  -> L2 candidate annotations
+  -> L4 objective policy
+  -> L3 meta scheduler policy
+  -> L1 final dispatch/pack recommendation
+  -> L2 final recipe/APC recommendation
+  -> Rule Engine
+  -> Command
 ```
 
-This is useful, but it is still too linear. The final design needs bottom-up
-candidate intelligence before upper-layer selection.
+`MESPlannerAgent` is now an orchestrator around factory-built policy slots. The
+default L1 policies are FIFO-style schedulers/packer, L2 is rule-based APC,
+L3 is `L3_CANDIDATE_PORTFOLIO_RULE`, and L4 is `L4_CYCLE_WEIGHT_RULE`.
+
+The current control-room simulator baseline is:
+
+```text
+A: 5 equipment, batch_size=3, process_time=20
+B: 3 equipment, batch_size=2, process_time=8
+C: 3 equipment, batch_size=4, process_time=2, max_packs_per_step=3
+```
 
 ## Target State
 
@@ -155,4 +159,3 @@ Pass 2: Execution intent
 
 This preserves local specialization while allowing global objectives to select
 among local possibilities.
-

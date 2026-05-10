@@ -25,7 +25,8 @@ scheduling, and machine-level APC quality behavior.
 - [x] Added a live `/mes` control room UI following `DESIGN.md`.
 - [x] Added automatic task generation and autoplay stepping so WIP flows through
   A -> B -> C over time.
-- [x] Updated process timings to `A=20`, `B=5`, `C=2`.
+- [x] Updated MES default batch baseline to `A=5 tools x batch 3 x 20`,
+  `B=3 tools x batch 2 x 8`, `C=3 tools x batch 4 x 2`.
 - [x] Added a global and stage Gantt view with rolling time window, current-time
   marker, task ids, C batch packing visualization, and no C buffer pseudo-row.
 - [x] Added machine detail dashboard for A/B equipment:
@@ -38,6 +39,15 @@ scheduling, and machine-level APC quality behavior.
   pass/fail counts, and material state snapshots.
 - [x] Added tests for live MES, Gantt behavior, autoplay flow, and A/B machine
   quality detail API.
+- [x] Added Control Room Traceability V1:
+  L3 budget plan, selected candidate portfolio, L2 annotations, final command,
+  and Gantt-to-machine-detail drilldown.
+- [x] Added factory-built swappable MES policy stack:
+  current default is FIFO-style L1 schedulers/packer, rule-based L2 APC,
+  `L3_CANDIDATE_PORTFOLIO_RULE`, and `L4_CYCLE_WEIGHT_RULE`, with policy ids
+  carried through recommendations and Control Room traceability.
+- [x] Added Control Room reset action:
+  `Reset -> POST /api/v2/simulation/reset -> refresh`.
 
 ## Verified
 
@@ -50,11 +60,19 @@ scheduling, and machine-level APC quality behavior.
 
 ## Next Checklist
 
+- [x] Implement MES Policy Stack V2:
+  - [x] Add swappable L3/L4 policy interfaces.
+  - [x] Move current `MESPlannerAgent` L3/L4 rule logic into default policy
+        classes.
+  - [x] Build L1/L2/L3/L4 policies through `src/agents/factory.py`.
+  - [x] Keep the harness as a policy orchestrator.
+  - [x] Add regression and fake L3 policy injection tests.
+  - [x] Expose L3/L4 policy ids in API/UI traceability.
 - [x] Add persistent database-backed runtime state beyond audit records:
   lots, wafers, equipment, recipes, events, recommendations, commands.
 - [x] Consolidate canonical AI MES, MES runtime, API, and UI documentation under
   `docs/ai-mes/`.
-- [ ] Replace the current linear harness decision flow with the documented
+- [x] Replace the current linear harness decision flow with the documented
   candidate-portfolio flow:
   - [x] Generate L1 candidate portfolios before L3 selection.
   - [x] Add C packing candidates grouped by customer/product/material.
@@ -67,7 +85,7 @@ scheduling, and machine-level APC quality behavior.
         consistency.
   - [x] Add full L2 annotations for every candidate before L3 selection, not
         only for the selected L1 candidate.
-  - [ ] Teach L3 to allocate multi-stage budgets from a single portfolio pass
+  - [x] Teach L3 to allocate multi-stage budgets from a single portfolio pass
         instead of selecting only one command per harness cycle.
 - [ ] Split the large static `live_ui.py` into maintainable frontend assets or
   templates before the UI grows further.
@@ -77,12 +95,12 @@ scheduling, and machine-level APC quality behavior.
 - [ ] Add explicit FeatureSnapshot schema persistence for every decision cycle.
 - [ ] Add genealogy views:
   lot -> wafer -> operation -> equipment -> recipe -> QA result -> command.
-- [ ] Add machine detail for C equipment:
+- [x] Add machine detail for C equipment:
   batch composition, packing quality, queue age, compatibility, pack id.
 - [ ] Add machine-level material/consumable models:
   A consumable life, B solution life, warning thresholds, replacement commands.
-- [ ] Add drilldown from Gantt bar to the same machine/task detail context.
-- [ ] Add evaluator checks for UI/API connectivity:
+- [x] Add drilldown from Gantt bar to the same machine/task detail context.
+- [x] Add evaluator checks for UI/API connectivity:
   live state, Gantt state, equipment detail, event chain, command audit.
 - [ ] Move simulation runtime control to a service layer that can later be
   replaced by production MES/SECS-GEM integration.
@@ -114,51 +132,52 @@ scheduling, and machine-level APC quality behavior.
 - `tests/test_mes_api.py`: API contract tests.
 - `tests/test_mes_autoplay.py`: live/autoplay/Gantt tests.
 
-## Current Implementation Gap
+## Current Implementation State
 
-The current MES harness is still linear:
-
-```text
-MESPlannerAgent creates L4 objective and L3 stage priority
-  -> MESGeneratorAgent gets one stage's rule candidates
-  -> generator selects the first L1 candidate
-  -> generator creates one L2 recipe/APC recommendation
-  -> Rule Engine validates L1/L2 and creates a command
-```
-
-The canonical architecture requires a different decision order:
+The MES harness now follows the documented two-pass decision order:
 
 ```text
 L1 local candidate portfolio
-  -> L2 candidate annotations
-  -> L4 objective
-  -> L3 stage/group/candidate selection
+  -> L2 annotations for every candidate
+  -> L4 objective weights
+  -> L3 stage/group/candidate selection and dispatch budgets
   -> L1 selected concrete allocation
   -> L2 selected process fields
   -> Rule Engine
   -> Command
+  -> Control Room traceability
 ```
 
-First implementation scope:
+Current Control Room Traceability V1 exposes:
+
+- L3 budget plan and selected candidate ids.
+- L3/L4 policy ids.
+- selected candidate portfolio rows with group/customer/product context.
+- L2 annotation count and selected candidate annotation.
+- final L1/L2 actions and Rule Engine command.
+- Gantt bar drilldown into the same machine detail API.
+
+Current simulator-backed MES baseline:
 
 ```text
-C packing portfolio first, while keeping A/B behavior compatible.
+A: 5 equipment, batch_size=3, process_time=20
+B: 3 equipment, batch_size=2, process_time=8
+C: 3 equipment, batch_size=4, process_time=2, max_packs_per_step=3
 ```
 
-This first slice should not rewrite the simulator kernel. It should keep the
-existing recommendation envelope and command shape, but add the missing
-portfolio fields:
+## Next Implementation Gap
 
-- `candidate_id`
-- `candidate_type`
-- `group_key`
-- `local_score`
-- `local_rank`
-- `features`
-- `reasons`
-- L3 `selected_candidate_id`
-- L3 `selected_group_key`
-- L2 `candidate_id`
+The next gap is to make experimentation and traceability deeper around the
+implemented decision chain:
+
+```text
+Experiment presets/runtime config
+  -> FeatureSnapshot schema persistence
+  -> genealogy views
+  -> recipe/APC adjustment commands
+  -> operator approval/hold/release workflows
+  -> production integration adapters
+```
 
 ## Notes
 

@@ -1,7 +1,7 @@
 # Implementation Roadmap
 
 Status: canonical  
-Last updated: 2026-05-06
+Last updated: 2026-05-10
 
 ## Guiding Principle
 
@@ -63,6 +63,8 @@ Acceptance:
 
 ## Phase 3: L3/L4 Selection Over Portfolio
 
+Status: implemented for the simulator-backed MES path.
+
 Deliverables:
 
 - L4 objective policy object,
@@ -80,6 +82,8 @@ Acceptance:
 
 ## Phase 4: Harness Refactor
 
+Status: implemented for the current harness API surface.
+
 Deliverables:
 
 - harness phases split into candidate generation, annotation, objective,
@@ -95,6 +99,10 @@ Acceptance:
 - rejected chains do not create commands.
 
 ## Phase 5: Rule Engine Consistency Gate
+
+Status: partially implemented. L3/L1 and L2/candidate consistency checks exist
+for the current recommendation chain; duplicate same-cycle and operator
+approval gates remain future work.
 
 Deliverables:
 
@@ -112,6 +120,10 @@ Acceptance:
 
 ## Phase 6: API Expansion
 
+Status: partially implemented through `/api/v2/decision-chain/{correlation_id}`
+traceability. Standalone candidate, annotation, meta-selection, and finalization
+APIs remain future work.
+
 Deliverables:
 
 - candidate portfolio endpoint,
@@ -127,6 +139,11 @@ Acceptance:
 - command execution still goes through Rule Engine.
 
 ## Phase 7: UI Expansion
+
+Status: partially implemented in `/mes`. The control room shows L3 budget plan,
+selected candidate rows, L2 annotations, L3/L4 policy ids, A/B/C machine detail,
+Gantt drilldown, autoplay, and reset. A full candidate portfolio workbench is
+still future work.
 
 Deliverables:
 
@@ -157,6 +174,19 @@ Acceptance:
   result, and equipment event,
 - runtime state can be reloaded beyond audit payloads,
 - SQLite path remains usable for MVP.
+
+## Next Priorities
+
+Recommended next build order:
+
+1. Runtime experiment presets and config controls for balanced/A-bottleneck/
+   B-bottleneck/stress scenarios.
+2. Full Candidate Portfolio workbench that exposes selected and unselected L1
+   candidates with L2 annotations and L3 upper scores.
+3. Explicit FeatureSnapshot persistence/indexing for every decision cycle.
+4. Lot/wafer genealogy views linking command, equipment, recipe/APC, QA result,
+   and event history.
+5. Recipe/APC command endpoints and operator hold/release/approval workflows.
 
 ## Phase 9: Operator Workflow And Production Boundaries
 
@@ -207,11 +237,11 @@ Do not remove `DefaultMetaScheduler` immediately. It remains:
 - regression comparator,
 - source of current A/B/C policy behavior.
 
-Add the layered MES policy stack beside it. Once the MES path is mature, compare:
+The layered MES policy stack now runs beside it. Once the MES path is mature,
+compare:
 
 - legacy meta scheduler KPI,
 - layered portfolio policy KPI,
 - acceptance/rejection rate,
 - layer chain completion rate,
 - throughput/yield/tardiness tradeoff.
-

@@ -19,6 +19,16 @@ def test_health():
     assert r.json()['status'] == 'ok'
 
 
+def test_control_room_exposes_simulation_reset_button():
+    r = client.get('/mes')
+
+    assert r.status_code == 200
+    html = r.text
+    assert 'id="reset"' in html
+    assert 'Reset' in html
+    assert '/api/v2/simulation/reset' in html
+
+
 def test_harness_run_and_read_back_chain():
     run = client.post('/api/v1/harness/run?target_stage=A')
     assert run.status_code == 200
@@ -51,7 +61,7 @@ def test_runtime_entity_endpoints_are_store_backed():
 
     assert lots['count'] > 0
     assert wafers['count'] >= lots['count']
-    assert equipment['count'] == 18
+    assert equipment['count'] == 11
     assert recipes['count'] >= 3
     assert {item['recipe_id'] for item in recipes['items']} >= {
         'SIM_A_BASE',
@@ -152,6 +162,44 @@ def test_v2_run_cycle_and_decision_chain_aggregation():
     assert c['counts']['recommendations'] >= 4
     assert c['counts']['events'] >= 5
     assert c['counts']['validations'] >= 1
+    trace = c['traceability']
+    assert trace['objective_id']
+    assert trace['l4_policy_id'] == 'L4_CYCLE_WEIGHT_RULE'
+    assert trace['l3_policy_id'] == 'L3_CANDIDATE_PORTFOLIO_RULE'
+    assert trace['selected_candidate_id']
+    assert trace['dispatch_budgets']
+    assert trace['candidate_count'] >= 1
+    assert trace['selected_candidates']
+    assert trace['l2_annotation_count'] >= 1
+    assert trace['command']['equipment_id']
+
+
+def test_v2_control_room_traceability_links_chain_gantt_and_equipment():
+    run = client.post('/api/v2/harness/run-cycle', json={'target_stage': 'AUTO'})
+    assert run.status_code == 200
+    payload = run.json()
+    assert payload['cycles']
+    assert all(cycle['evaluation']['status'] == 'PASSED' for cycle in payload['cycles'])
+
+    live = client.get('/api/v2/fab/live')
+    assert live.status_code == 200
+    active_chain = live.json()['active_chain']
+    trace = active_chain['traceability']
+    equipment_id = trace['command']['equipment_id']
+
+    assert active_chain['counts']['commands'] >= 1
+    assert trace['selected_candidates']
+    assert trace['final_l1_action']['candidate_id'] == trace['selected_candidate_id']
+    assert trace['final_l2_action']['candidate_id'] == trace['selected_candidate_id']
+
+    gantt = client.get('/api/v2/gantt')
+    assert gantt.status_code == 200
+    bars = gantt.json()['bars']
+    assert any(bar['machine_id'] == equipment_id for bar in bars)
+
+    detail = client.get(f'/api/v2/equipment/{equipment_id}/detail')
+    assert detail.status_code == 200
+    assert detail.json()['equipment_id'] == equipment_id
 
 
 def test_v2_run_until_stops_with_max_cycles_or_conditions():
@@ -188,3 +236,41 @@ def test_v2_equipment_detail_exposes_a_b_quality_trends():
         assert point['recipe']
         assert point['material_state']['primary_key'] in ('u', 'v')
         assert 'target_window' in point
+
+
+def test_v2_equipment_detail_exposes_c_pack_composition():
+    client.post('/api/v2/simulation/reset')
+    client.post(
+        '/api/v2/simulation/autoplay/start',
+        json={'target_stage': 'AUTO', 'generate_every': 20, 'bootstrap_cycles': 0},
+    )
+    client.get('/api/v2/simulation/autoplay/status?step_cycles=90')
+
+    r = client.get('/api/v2/equipment/C_0/detail')
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body['equipment_id'] == 'C_0'
+    assert body['stage'] == 'C'
+    assert body['process_label'] == 'Packing / Material Compatibility'
+    assert body['kpis']['packed_tasks'] > 0
+    assert body['kpis']['packs_completed'] > 0
+    assert 0.0 <= body['kpis']['avg_compatibility'] <= 1.0
+    assert body['pack_series']
+
+    pack = body['pack_series'][0]
+    assert pack['task_uids']
+    assert pack['material_counts']
+    assert pack['color_counts']
+    assert set(pack['material_counts']).issubset({'plastic', 'metal', 'composite'})
+    assert set(pack['color_counts']).issubset({'red', 'blue', 'green'})
+    assert 0.0 <= pack['avg_compatibility'] <= 1.0
+    expected_quality = (
+        (
+            max(pack['material_counts'].values())
+            + max(pack['color_counts'].values())
+        )
+        / (2 * len(pack['task_uids']))
+    ) * 100
+    assert pack['quality'] == expected_quality
+    assert 'composition_label' in pack

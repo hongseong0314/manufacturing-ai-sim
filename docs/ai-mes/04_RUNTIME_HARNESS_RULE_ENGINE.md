@@ -35,6 +35,11 @@ The MES must never bypass this contract.
 `MESDevelopmentHarness` currently wires:
 
 ```text
+MESPolicyStack
+  -> L1 scheduler/packer policies
+  -> L2 APC/tuner policies
+  -> L4 objective policy
+  -> L3 meta scheduler policy
 MESPlannerAgent
   -> MESGeneratorAgent
   -> MESEvaluatorAgent
@@ -62,9 +67,10 @@ run(decision_state)
        store.record_command_executed(...)
 ```
 
-This is a useful development harness. The target architecture should keep the
-same audit discipline but replace the linear generation model with candidate
-portfolio flow.
+`MESPlannerAgent` is now an orchestrator: it collects L1 candidates, asks L2 to
+annotate them, delegates objective selection to the L4 policy, delegates
+stage/group/candidate budget selection to the L3 policy, and then creates the
+auditable L4/L3 recommendations.
 
 ## Target Harness
 
@@ -233,4 +239,3 @@ scan.
 - Environment modules must not contain scheduling decisions.
 - AI recommendation status must be updated after validation.
 - Commands must keep the `correlation_id` that links the full chain.
-

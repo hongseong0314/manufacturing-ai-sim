@@ -1,7 +1,7 @@
 # API Contracts
 
 Status: canonical  
-Last updated: 2026-05-06
+Last updated: 2026-05-10
 
 ## Purpose
 
@@ -27,7 +27,7 @@ The current implementation lives in `src/mes/api.py`.
 | `GET /api/v1/events` | Event records, optional `correlation_id` |
 | `GET /api/v1/commands` | Command records, optional `correlation_id` |
 | `GET /api/v2/decision-chain/{correlation_id}` | Aggregated chain details |
-| `GET /api/v2/equipment/{equipment_id}/detail` | A/B machine quality dashboard data |
+| `GET /api/v2/equipment/{equipment_id}/detail` | A/B/C machine quality and packing detail data |
 | `GET /api/v2/gantt` | Gantt rows, bars, stage views, and horizon |
 | `GET /api/v2/fab/live` | Live control-room state |
 
@@ -198,6 +198,19 @@ Recommended error categories:
 | 500 | unexpected internal error |
 
 Rule rejects should usually return `200` with `validation_status="REJECTED"`
+
+## Current Control Room Runtime Baseline
+
+The local `/mes` runtime currently starts with:
+
+```text
+A: 5 equipment, batch_size=3, process_time=20
+B: 3 equipment, batch_size=2, process_time=8
+C: 3 equipment, batch_size=4, process_time=2, max_packs_per_step=3
+```
+
+The UI exposes Start, Stop, Run cycle, Generate lot, and Reset. Reset calls
+`POST /api/v2/simulation/reset` and refreshes live state.
 when the API request is valid but the recommendation is not executable.
 
 ## API Evolution Rules
@@ -207,4 +220,3 @@ when the API request is valid but the recommendation is not executable.
 - Keep `/api/v2/*` simulation control endpoints as MVP runtime controls.
 - Do not expose direct simulator mutations except through validated commands or
   explicit development endpoints such as task generation/reset.
-

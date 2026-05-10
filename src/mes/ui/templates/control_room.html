@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Semiconductor AI MES</title>
+  <style>{{ control_room_css }}</style>
+
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <strong>Semiconductor AI MES</strong>
+        <span>Live simulator line</span>
+      </div>
+      <div class="nav-label">Operate</div>
+      <a class="nav-item active" href="#fab"><span>Fab Control</span><span id="nav-live">Live</span></a>
+      <a class="nav-item" href="#gantt"><span>Flow & Gantt</span><span id="nav-gantt">-</span></a>
+      <a class="nav-item" href="#chain"><span>Decision Chain</span><span id="nav-chain">-</span></a>
+      <a class="nav-item" href="#equipment"><span>Equipment</span><span id="nav-eqp">-</span></a>
+      <a class="nav-item" href="#machine"><span>Machine Detail</span><span id="nav-machine">-</span></a>
+      <div class="nav-label">Trace</div>
+      <a class="nav-item" href="#events"><span>Events</span><span id="nav-events">-</span></a>
+    </aside>
+    <main class="workspace" id="fab">
+      <header class="topbar">
+        <div>
+          <h1>Fab Control Room</h1>
+          <div class="meta-row">
+            <span>sim_time: <code id="sim-time">0</code></span>
+            <span>correlation_id: <code id="corr-id">-</code></span>
+            <span class="status green" id="rule-gate">READY</span>
+            <span class="status purple">RULE BASELINE</span>
+          </div>
+        </div>
+        <div class="commands">
+          <select id="speed" class="button">
+            <option value="1">1 cycle</option>
+            <option value="3" selected>3 cycles</option>
+            <option value="8">8 cycles</option>
+          </select>
+          <button class="button primary" id="start">Start</button>
+          <button class="button" id="stop">Stop</button>
+          <button class="button" id="step">Run cycle</button>
+          <button class="button" id="generate">Generate lot</button>
+          <button class="button" id="reset">Reset</button>
+        </div>
+      </header>
+      <div class="layout">
+        <section class="kpis">
+          <div class="panel kpi"><div class="kpi-label">Total WIP</div><div class="kpi-value" id="kpi-wip">0</div><div class="kpi-note" id="kpi-wip-note">A/B/C</div></div>
+          <div class="panel kpi"><div class="kpi-label">Completed</div><div class="kpi-value" id="kpi-completed">0</div><div class="kpi-note">packed wafers</div></div>
+          <div class="panel kpi"><div class="kpi-label">Yield Proxy</div><div class="kpi-value" id="kpi-yield">1.00</div><div class="kpi-note">process pass ratio</div></div>
+          <div class="panel kpi"><div class="kpi-label">Throughput</div><div class="kpi-value" id="kpi-throughput">0.00</div><div class="kpi-note">completed / time</div></div>
+          <div class="panel kpi"><div class="kpi-label">Utilization</div><div class="kpi-value" id="kpi-util">0%</div><div class="kpi-note">busy equipment</div></div>
+          <div class="panel kpi"><div class="kpi-label">Commands</div><div class="kpi-value" id="kpi-commands">0</div><div class="kpi-note">executed</div></div>
+        </section>
+        <section class="flow-gantt-grid" id="gantt">
+          <div class="panel">
+            <div class="panel-header"><h2>Process Flow</h2><span id="flow-state">A → B → C</span></div>
+            <div class="flow-board" id="flow-board"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-header"><h2>Global Gantt</h2><span id="gantt-window">t=0</span></div>
+            <div class="gantt-shell">
+              <div class="gantt-toolbar">
+                <div class="legend">
+                  <span class="legend-item"><i class="legend-swatch" style="background: var(--blue)"></i>Running</span>
+                  <span class="legend-item"><i class="legend-swatch" style="background: var(--green)"></i>Finished</span>
+                  <span class="legend-item"><i class="legend-swatch" style="background: #edf5ff; border: 1px solid var(--blue)"></i>Next eligible</span>
+                  <span class="legend-item"><i class="legend-swatch" style="background: var(--red)"></i>Rework</span>
+                </div>
+                <span class="kpi-note">current time marker is red</span>
+              </div>
+              <div id="global-gantt"></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header"><h2>Stage Drilldown</h2><span id="stage-detail-title">Stage A</span></div>
+            <div class="stage-detail-grid">
+              <div class="gantt-shell" id="stage-gantt"></div>
+              <div class="table-wrap">
+                <table class="schedule-table">
+                  <thead><tr><th>Equipment</th><th>Status</th><th>Task UIDs</th><th>Window</th><th>Progress</th></tr></thead>
+                  <tbody id="schedule-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+        <section class="main-grid">
+          <div class="panel active">
+            <div class="panel-header"><h2>Stage Board</h2><span id="autoplay-state">stopped</span></div>
+            <div class="stage-grid" id="stage-grid"></div>
+          </div>
+          <div class="panel" id="chain">
+            <div class="panel-header"><h2>Decision Chain</h2><span id="chain-count">0 records</span></div>
+            <div class="trace-grid" id="chain-trace"></div>
+            <div class="chain" id="chain-list"></div>
+          </div>
+        </section>
+        <section class="split-grid" id="equipment">
+          <div class="panel">
+            <div class="panel-header"><h2>Equipment Matrix</h2><span id="equipment-count">0 tools</span></div>
+            <div class="table-wrap">
+              <table><thead><tr><th>Equipment</th><th>Stage</th><th>Status</th><th>Batch</th><th>Current UIDs</th><th>Finish</th></tr></thead><tbody id="equipment-body"></tbody></table>
+            </div>
+          </div>
+          <div class="panel" id="events">
+            <div class="panel-header"><h2>Event Timeline</h2><span id="event-count">0 events</span></div>
+            <div class="events" id="event-list"></div>
+          </div>
+        </section>
+        <section class="panel machine-dashboard" id="machine">
+          <div class="panel-header">
+            <h2>Machine Detail</h2>
+            <div class="header-actions">
+              <span id="machine-subtitle">Select an A/B/C machine</span>
+              <button class="button" id="machine-back" type="button">Back to equipment</button>
+            </div>
+          </div>
+          <div class="empty-state" id="machine-empty">
+            Equipment rows open APC quality trends for A/B and packing composition quality for C.
+          </div>
+          <div class="machine-content" id="machine-content" hidden>
+            <div class="machine-kpi-grid" id="machine-kpis"></div>
+            <div class="machine-detail-grid">
+              <div>
+                <div class="panel-header"><h2>Quality Trend</h2><span id="machine-axis">step × quality</span></div>
+                <div class="machine-chart" id="quality-chart"></div>
+              </div>
+              <div>
+                <div class="panel-header"><h2>Point Snapshot</h2><span id="point-title">latest</span></div>
+                <div class="point-detail" id="point-detail"></div>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Step</th><th>Tasks</th><th>Quality</th><th>Recipe</th><th>Material</th><th>Result</th></tr></thead>
+                <tbody id="machine-history-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <script>{{ control_room_js }}</script>
+
+</body>
+</html>

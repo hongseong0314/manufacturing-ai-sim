@@ -1,7 +1,7 @@
 # Runtime, Harness, Rule Engine, And Commands
 
 Status: canonical  
-Last updated: 2026-05-06
+Last updated: 2026-05-10
 
 ## Purpose
 
@@ -30,7 +30,7 @@ observation, reward, done, info = env.step(actions)
 
 The MES must never bypass this contract.
 
-## Current Harness
+## Current Harness And Runtime Modules
 
 `MESDevelopmentHarness` currently wires:
 
@@ -45,6 +45,19 @@ MESPlannerAgent
   -> MESEvaluatorAgent
   -> InMemoryMESStore / SQLiteMESStore
 ```
+
+Implementation map:
+
+| Component | Module |
+|---|---|
+| Harness facade | `src/mes/harness.py` |
+| DTO artifacts | `src/mes/harnessing/artifacts.py` |
+| Planner | `src/mes/harnessing/planner.py` |
+| Generator | `src/mes/harnessing/generator.py` |
+| Evaluator | `src/mes/harnessing/evaluator.py` |
+| Policy factory | `src/agents/factory.py` |
+| L3/L4 policies | `src/agents/mes_policies.py` |
+| Runtime orchestration | `src/mes/runtime/simulation_control.py` |
 
 Current `run()` flow:
 
@@ -106,13 +119,15 @@ Current validation checks:
 - equipment is available,
 - L2 recipe fields can be copied into the command.
 
-Target validation checks:
+Implemented layered validation checks:
 
-- current checks,
 - L3 selected stage/group matches L1 selected candidate,
 - L4 objective id matches all downstream recommendations,
 - L1 selected candidate exists in the submitted candidate portfolio,
-- L2 selected recipe/APC references the selected L1 candidate,
+- L2 selected recipe/APC references the selected L1 candidate.
+
+Future validation checks:
+
 - recipe is approved and compatible with operation/equipment,
 - duplicate candidate/task assignment is rejected across same cycle,
 - command count respects L4/L3 budgets,
@@ -203,7 +218,7 @@ Current checks:
 - store contains chain records,
 - command and command event align.
 
-Target checks:
+Implemented layered checks:
 
 - candidate portfolio exists before upper selection,
 - selected L3 group appears in L1 portfolio,
@@ -226,10 +241,11 @@ Execute validates and calls `env.step()`.
 
 ### Auto
 
-Current auto mode scans ready stages and may execute multiple commands in one
-simulator tick. Target auto mode should source stage/group priority from L3
-selection over candidate portfolios, not from a hard-coded C/B/A ready-stage
-scan.
+Current auto mode is driven by the L3 budget plan. It builds one annotated L1
+candidate portfolio, asks L4/L3 for selected candidate ids and dispatch budgets,
+then executes the selected validated commands in one simulator tick. It no
+longer uses the legacy hard-coded C/B/A ready-stage scan for the main AUTO
+path.
 
 ## Safety Rules
 

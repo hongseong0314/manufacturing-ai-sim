@@ -1,7 +1,4 @@
-from fastapi.testclient import TestClient
-from src.mes.api import app
-
-client = TestClient(app)
+from mes_api_support import client, reset_simulation_between_tests
 
 
 def test_machine_counts_and_live():
@@ -56,64 +53,6 @@ def test_auto_cycle_uses_l3_budget_plan_for_parallel_dispatch():
     assert budget_plan['dispatch_budgets']['A'] == len(payload['combined_actions']['A'])
     assert budget_plan['constraints']['max_commands_per_cycle'] == len(selected_ids)
     assert payload['count'] == len(selected_ids)
-
-
-def test_gantt_endpoint_exposes_flow_and_stage_schedule():
-    client.post('/api/v2/simulation/reset')
-    initial = client.get('/api/v2/gantt')
-    assert initial.status_code == 200
-    body = initial.json()
-    assert [item['stage'] for item in body['flow']] == ['A', 'B', 'C']
-    assert body['horizon']['end'] > body['horizon']['start']
-    planned_a = next(
-        bar for bar in body['bars']
-        if bar['stage'] == 'A' and bar['status'] == 'planned'
-    )
-    assert planned_a['duration'] == 20
-    assert planned_a['label'].startswith('Next T')
-
-    client.post('/api/v2/harness/run-cycle', json={'target_stage': 'AUTO'})
-    active = client.get('/api/v2/gantt').json()
-    assert active['time'] >= 1
-    assert active['stage_views']['A']['rows']
-    assert any(
-        bar['source'] == 'event_log' and bar['stage'] == 'A'
-        for bar in active['stage_views']['A']['bars']
-    )
-
-
-def test_gantt_window_and_a_apc_prevent_rework_wall():
-    client.post('/api/v2/simulation/reset')
-    client.post(
-        '/api/v2/simulation/autoplay/start',
-        json={'target_stage': 'AUTO', 'generate_every': 20, 'bootstrap_cycles': 0},
-    )
-    live = client.get(
-        '/api/v2/simulation/autoplay/status?step_cycles=90'
-    ).json()['live']
-
-    assert live['time'] >= 90
-    assert live['kpis']['yield_proxy'] >= 0.95
-    assert live['stages']['A']['rework'] == 0
-
-    gantt = client.get('/api/v2/gantt').json()
-    assert gantt['horizon']['start'] > 0
-    assert gantt['horizon']['span'] <= 48
-    assert gantt['visible_bar_count'] < gantt['total_bar_count']
-    assert any(
-        bar['stage'] == 'C'
-        and bar['task_type'] == 'pack'
-        and bar['duration'] == 2
-        and bar['stack_size'] > 1
-        for bar in gantt['bars']
-    )
-    assert all(row['machine_id'] != 'C_BUFFER' for row in gantt['rows'])
-    assert all(bar['machine_id'] != 'C_BUFFER' for bar in gantt['bars'])
-    assert all(
-        len(bar.get('batch_task_uids', [])) == 4
-        for bar in gantt['bars']
-        if bar['stage'] == 'C' and bar['task_type'] == 'pack'
-    )
 
 
 def test_mes_screen_serves_live_control_room():

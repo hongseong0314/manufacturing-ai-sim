@@ -1,7 +1,7 @@
 # MES Domain Model
 
 Status: canonical  
-Last updated: 2026-05-06
+Last updated: 2026-05-10
 
 ## Purpose
 
@@ -278,4 +278,26 @@ genealogy from events.
 | runtime entity persistence | `InMemoryMESStore` / `SQLiteMESStore` |
 | audit persistence | store classes |
 | final command validation | `MESRuleEngine` |
-| UI presentation | API response contracts and `live_ui.py` |
+| API route wiring | `src/mes/api.py` |
+| runtime payloads | `src/mes/runtime/*` |
+| UI presentation | `src/mes/ui/templates/control_room.html`, `src/mes/ui/static/*` |
+
+## Current Runtime Module Map
+
+The MES domain DTOs remain in `src/mes/domain.py`. The current runtime and
+decision services are split by responsibility:
+
+| Module | Owns |
+|---|---|
+| `src/mes/runtime/context.py` | environment, store, harness lifecycle and reset |
+| `src/mes/runtime/simulation_control.py` | generate lot, run-cycle, run-until, autoplay stepping |
+| `src/mes/runtime/live_state.py` | KPI, WIP, stage, equipment, and live control-room payload |
+| `src/mes/runtime/decision_trace.py` | decision-chain aggregation and traceability payload |
+| `src/mes/runtime/equipment_detail.py` | A/B quality trends and C packing composition detail |
+| `src/mes/runtime/gantt.py` | Gantt rows, bars, stage views, horizon, and legend |
+| `src/mes/decision/candidates.py` | L1 A/B dispatch and C pack candidate portfolio |
+| `src/mes/decision/annotations.py` | L2 candidate annotation and final APC/process action |
+| `src/mes/decision/simulator_actions.py` | rule validation and command-to-action conversion helpers |
+| `src/mes/harnessing/planner.py` | L4 objective and L3 meta-selection recommendation creation |
+| `src/mes/harnessing/generator.py` | L1/L2 final recommendation creation |
+| `src/mes/harnessing/evaluator.py` | chain integrity checks |

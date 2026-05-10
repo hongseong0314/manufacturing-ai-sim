@@ -197,7 +197,14 @@ Mobile:
 
 Current implementation:
 
-- `/mes` route serves `LIVE_MES_HTML` from `src/mes/live_ui.py`.
+- `/mes` route serves rendered control-room HTML from
+  `src/mes/ui/assets.py`.
+- Markup, styles, and client behavior live in:
+  - `src/mes/ui/templates/control_room.html`,
+  - `src/mes/ui/static/control_room.css`,
+  - `src/mes/ui/static/control_room.js`.
+- `src/mes/live_ui.py` remains only as a compatibility import for
+  `LIVE_MES_HTML`.
 - UI polls live endpoints.
 - It already shows WIP, equipment, decision chain, events, Gantt, autoplay,
   reset, A/B machine quality detail, C machine packing detail, L3 budget plan,

@@ -58,14 +58,20 @@ and maintenance context to the candidates and final command.
 
 - Keep simulator physics in `src/environment/*`.
 - Keep per-process local policies in `src/schedulers/*` and `src/tuners/*`.
-- Treat `src/agents/default_meta_scheduler.py` as the current legacy simulator
-  orchestrator, not the final MES layered policy stack.
-- Treat `src/mes/harness.py` as the current MES development harness. It now
-  orchestrates the two-pass layered architecture described here.
+- Treat `src/agents/factory.py` as the policy-stack source of truth. It builds
+  the swappable L1/L2/L3/L4 stack from config.
+- Treat `src/agents/default_meta_scheduler.py` as a legacy simulator
+  orchestrator and regression comparator, not the active MES L3 path.
+- Treat `src/mes/harness.py` as a compatibility facade. The actual planner,
+  generator, evaluator, and DTO artifacts live under `src/mes/harnessing/`.
 - Treat `src/mes/rule_engine.py` as the execution gate. AI recommendations do
   not directly mutate simulator or MES state.
-- Treat `src/mes/api.py` and `src/mes/live_ui.py` as the simulator-backed MVP
-  surface, not production MES integration.
+- Treat `src/mes/api.py` as route wiring only. Runtime state, simulation
+  control, traceability, equipment detail, and Gantt payload builders live under
+  `src/mes/runtime/`.
+- Treat `src/mes/ui/templates/control_room.html` and `src/mes/ui/static/*` as
+  the control-room implementation. `src/mes/live_ui.py` is a compatibility
+  import only.
 
 ## Current Implementation Snapshot
 
@@ -80,10 +86,16 @@ Implemented today:
   AIRecommendation, Event, Genealogy, RuleValidationResult, MESCommand.
 - Rule engine: validates L1 dispatch/pack plus L2 recipe and creates a command.
 - Harness: creates a two-pass `L1 portfolio -> L2 annotations -> L4 -> L3
-  -> L1 -> L2` recommendation chain.
+  -> L1 -> L2` recommendation chain through `src/mes/harnessing/`.
 - MES policy stack: factory-built L1/L2/L3/L4 policy slots with current
   defaults `L1_FIFO_BASELINE`, `L2_RULE_BASED_APC`,
   `L3_CANDIDATE_PORTFOLIO_RULE`, and `L4_CYCLE_WEIGHT_RULE`.
+- Runtime: `src/mes/runtime/context.py`, `simulation_control.py`,
+  `live_state.py`, `decision_trace.py`, `equipment_detail.py`, and `gantt.py`
+  own API payload generation and simulator lifecycle.
+- Decision service: `src/mes/services.py` is a facade over
+  `src/mes/decision/candidates.py`, `annotations.py`, and
+  `simulator_actions.py`.
 - Store: in-memory plus SQLite JSON payload persistence for audit records and
   runtime entities.
 - API/UI: live simulator-backed MES endpoints and a dense `/mes` control room.

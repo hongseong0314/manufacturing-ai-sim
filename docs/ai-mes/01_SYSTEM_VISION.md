@@ -74,7 +74,9 @@ The current policy kernel owns local and legacy orchestration decisions.
 | `src/schedulers/packers_c.py` | C pack selection | L1 C pack candidate/finalizer |
 | `src/tuners/tuners_a.py` | A recipe/replacement | L2 A recipe/APC annotator/finalizer |
 | `src/tuners/tuners_b.py` | B recipe/replacement | L2 B recipe/APC annotator/finalizer |
-| `src/agents/default_meta_scheduler.py` | V1 A/B/C action orchestrator | Legacy simulator baseline and source material for L3 |
+| `src/agents/mes_policies.py` | L3/L4 policy interfaces and rule baselines | Active MES L3/L4 policy implementation |
+| `src/agents/factory.py` | Config-driven policy construction | Active MES policy-stack factory |
+| `src/agents/default_meta_scheduler.py` | V1 A/B/C action orchestrator | Legacy simulator baseline and comparator |
 
 The target MES should preserve these policies as lower-level policy components
 instead of burying them inside a monolithic meta scheduler.
@@ -88,13 +90,23 @@ and UI.
 |---|---|
 | `src/mes/domain.py` | MES-facing dataclasses |
 | `src/mes/adapters.py` | simulator <-> MES DTO/action mapping |
-| `src/mes/services.py` | candidate and decision service helpers |
+| `src/mes/services.py` | thin facade for decision services |
+| `src/mes/decision/candidates.py` | L1 candidate portfolio generation |
+| `src/mes/decision/annotations.py` | L2 candidate annotations and final APC/process actions |
+| `src/mes/decision/simulator_actions.py` | rule validation and simulator action conversion helpers |
 | `src/mes/rule_engine.py` | execution validation gate |
-| `src/mes/harness.py` | development harness for layered decision chains |
+| `src/mes/harness.py` | compatibility facade for layered decision chains |
+| `src/mes/harnessing/planner.py` | L4 objective and L3 meta-selection orchestration |
+| `src/mes/harnessing/generator.py` | L1/L2 final recommendation generation |
+| `src/mes/harnessing/evaluator.py` | development-time chain integrity evaluation |
 | `src/mes/store.py` | in-memory repository and audit events |
 | `src/mes/sqlite_store.py` | local SQLite persistence |
-| `src/mes/api.py` | FastAPI endpoints and live runtime |
-| `src/mes/live_ui.py` | current static control room UI |
+| `src/mes/runtime/*` | runtime context, simulation control, live state, traceability, equipment detail, Gantt |
+| `src/mes/api.py` | FastAPI app and route registration only |
+| `src/mes/ui/templates/control_room.html` | control-room HTML template |
+| `src/mes/ui/static/control_room.js` | control-room client behavior |
+| `src/mes/ui/static/control_room.css` | control-room styling |
+| `src/mes/live_ui.py` | compatibility import for rendered control-room HTML |
 
 ## Non-Goals
 
@@ -129,6 +141,19 @@ L1 candidate portfolio
 `MESPlannerAgent` is now an orchestrator around factory-built policy slots. The
 default L1 policies are FIFO-style schedulers/packer, L2 is rule-based APC,
 L3 is `L3_CANDIDATE_PORTFOLIO_RULE`, and L4 is `L4_CYCLE_WEIGHT_RULE`.
+
+The active config keys are:
+
+| Layer | Config key | Default |
+|---|---|---|
+| L1 A scheduler | `scheduler_A` | `fifo` |
+| L1 B scheduler | `scheduler_B` | `fifo` |
+| L1 C packer | `packing_C` | `fifo` |
+| C candidate mode | `mes_l1_C` | `packing_C` value |
+| L2 A APC | `tuner_A` | `rule-based` |
+| L2 B APC | `tuner_B` | `rule-based` |
+| L3 meta policy | `meta_scheduler_L3` | `candidate-portfolio-rule` |
+| L4 objective policy | `objective_policy_L4` | `cycle-weight-rule` |
 
 The current control-room simulator baseline is:
 

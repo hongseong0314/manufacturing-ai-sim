@@ -1,16 +1,4 @@
-from fastapi.testclient import TestClient
-import pytest
-
-from src.mes.api import app
-
-
-client = TestClient(app)
-
-
-@pytest.fixture(autouse=True)
-def reset_simulation_between_tests():
-    client.post('/api/v2/simulation/reset')
-    yield
+from mes_api_support import client, reset_simulation_between_tests
 
 
 def test_health():
@@ -174,34 +162,6 @@ def test_v2_run_cycle_and_decision_chain_aggregation():
     assert trace['command']['equipment_id']
 
 
-def test_v2_control_room_traceability_links_chain_gantt_and_equipment():
-    run = client.post('/api/v2/harness/run-cycle', json={'target_stage': 'AUTO'})
-    assert run.status_code == 200
-    payload = run.json()
-    assert payload['cycles']
-    assert all(cycle['evaluation']['status'] == 'PASSED' for cycle in payload['cycles'])
-
-    live = client.get('/api/v2/fab/live')
-    assert live.status_code == 200
-    active_chain = live.json()['active_chain']
-    trace = active_chain['traceability']
-    equipment_id = trace['command']['equipment_id']
-
-    assert active_chain['counts']['commands'] >= 1
-    assert trace['selected_candidates']
-    assert trace['final_l1_action']['candidate_id'] == trace['selected_candidate_id']
-    assert trace['final_l2_action']['candidate_id'] == trace['selected_candidate_id']
-
-    gantt = client.get('/api/v2/gantt')
-    assert gantt.status_code == 200
-    bars = gantt.json()['bars']
-    assert any(bar['machine_id'] == equipment_id for bar in bars)
-
-    detail = client.get(f'/api/v2/equipment/{equipment_id}/detail')
-    assert detail.status_code == 200
-    assert detail.json()['equipment_id'] == equipment_id
-
-
 def test_v2_run_until_stops_with_max_cycles_or_conditions():
     r = client.post('/api/v2/harness/run-until', json={'target_stage': 'A', 'max_cycles': 2})
     assert r.status_code == 200
@@ -209,68 +169,3 @@ def test_v2_run_until_stops_with_max_cycles_or_conditions():
     assert body['count'] <= 2
     assert body['stop_reason'] in ('max_cycles', 'rejected', 'no_candidates')
     assert len(body['cycles']) == body['count']
-
-
-def test_v2_equipment_detail_exposes_a_b_quality_trends():
-    client.post(
-        '/api/v2/simulation/autoplay/start',
-        json={'target_stage': 'AUTO', 'generate_every': 20, 'bootstrap_cycles': 0},
-    )
-    client.get('/api/v2/simulation/autoplay/status?step_cycles=70')
-
-    for equipment_id, stage in (('A_0', 'A'), ('B_0', 'B')):
-        r = client.get(f'/api/v2/equipment/{equipment_id}/detail')
-        assert r.status_code == 200
-        body = r.json()
-        assert body['equipment_id'] == equipment_id
-        assert body['stage'] == stage
-        assert body['process_label']
-        assert body['kpis']['processed'] > 0
-        assert 0.0 <= body['kpis']['yield_rate'] <= 1.0
-        assert body['quality_series']
-
-        point = body['quality_series'][0]
-        assert point['time'] >= 0
-        assert point['quality'] > 0
-        assert point['task_uids']
-        assert point['recipe']
-        assert point['material_state']['primary_key'] in ('u', 'v')
-        assert 'target_window' in point
-
-
-def test_v2_equipment_detail_exposes_c_pack_composition():
-    client.post('/api/v2/simulation/reset')
-    client.post(
-        '/api/v2/simulation/autoplay/start',
-        json={'target_stage': 'AUTO', 'generate_every': 20, 'bootstrap_cycles': 0},
-    )
-    client.get('/api/v2/simulation/autoplay/status?step_cycles=90')
-
-    r = client.get('/api/v2/equipment/C_0/detail')
-
-    assert r.status_code == 200
-    body = r.json()
-    assert body['equipment_id'] == 'C_0'
-    assert body['stage'] == 'C'
-    assert body['process_label'] == 'Packing / Material Compatibility'
-    assert body['kpis']['packed_tasks'] > 0
-    assert body['kpis']['packs_completed'] > 0
-    assert 0.0 <= body['kpis']['avg_compatibility'] <= 1.0
-    assert body['pack_series']
-
-    pack = body['pack_series'][0]
-    assert pack['task_uids']
-    assert pack['material_counts']
-    assert pack['color_counts']
-    assert set(pack['material_counts']).issubset({'plastic', 'metal', 'composite'})
-    assert set(pack['color_counts']).issubset({'red', 'blue', 'green'})
-    assert 0.0 <= pack['avg_compatibility'] <= 1.0
-    expected_quality = (
-        (
-            max(pack['material_counts'].values())
-            + max(pack['color_counts'].values())
-        )
-        / (2 * len(pack['task_uids']))
-    ) * 100
-    assert pack['quality'] == expected_quality
-    assert 'composition_label' in pack

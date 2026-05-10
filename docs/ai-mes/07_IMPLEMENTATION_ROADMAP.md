@@ -26,6 +26,8 @@ Acceptance:
 
 ## Phase 1: C Packing Candidate Portfolio
 
+Status: implemented in the simulator-backed MES path.
+
 Why first:
 
 - C packing has the clearest policy factorization.
@@ -34,7 +36,7 @@ Why first:
 
 Deliverables:
 
-- `generate_pack_candidates(wait_pool, current_time, group_by=...)`,
+- L1 candidate portfolio generation in `src/mes/decision/candidates.py`,
 - candidate ids,
 - group keys,
 - local scores,
@@ -48,6 +50,8 @@ Acceptance:
 - no simulator environment code contains scheduling decisions.
 
 ## Phase 2: L2 Candidate Annotation
+
+Status: implemented in `src/mes/decision/annotations.py`.
 
 Deliverables:
 
@@ -82,12 +86,20 @@ Acceptance:
 
 ## Phase 4: Harness Refactor
 
-Status: implemented for the current harness API surface.
+Status: implemented for the current harness API surface and completed as a
+Strangler Refactor.
 
 Deliverables:
 
 - harness phases split into candidate generation, annotation, objective,
   selection, finalization, validation, storage, execution,
+- `src/mes/harness.py` reduced to a compatibility facade,
+- DTOs moved to `src/mes/harnessing/artifacts.py`,
+- planner/generator/evaluator moved to `src/mes/harnessing/`,
+- `src/mes/services.py` reduced to a facade over `src/mes/decision/`,
+- `src/mes/api.py` reduced to FastAPI route wiring,
+- runtime payload builders moved to `src/mes/runtime/`,
+- control-room UI moved to `src/mes/ui/templates` and `src/mes/ui/static`,
 - evaluator checks for portfolio and layer consistency,
 - current `run()`/`run_and_step()` behavior preserved behind compatible output.
 
@@ -100,17 +112,21 @@ Acceptance:
 
 ## Phase 5: Rule Engine Consistency Gate
 
-Status: partially implemented. L3/L1 and L2/candidate consistency checks exist
-for the current recommendation chain; duplicate same-cycle and operator
-approval gates remain future work.
+Status: implemented for current L4/L3/L1/L2 chain consistency. Duplicate
+same-cycle reservation locks and operator approval gates remain future work.
 
 Deliverables:
 
 - validation that L3 selected group matches L1 selected candidate,
 - validation that L2 recommendation references selected L1 candidate,
 - validation that L4 objective id matches the chain,
-- duplicate same-cycle task checks,
 - clearer rejection reasons.
+
+Future deliverables:
+
+- duplicate same-cycle task checks across concurrent command batches,
+- operator approval gates,
+- recipe approval/download compatibility gates.
 
 Acceptance:
 
@@ -120,17 +136,25 @@ Acceptance:
 
 ## Phase 6: API Expansion
 
-Status: partially implemented through `/api/v2/decision-chain/{correlation_id}`
-traceability. Standalone candidate, annotation, meta-selection, and finalization
-APIs remain future work.
+Status: implemented for the current control-room API surface. Standalone
+candidate, annotation, meta-selection, and finalization APIs remain future work.
 
 Deliverables:
 
-- candidate portfolio endpoint,
-- annotation endpoint,
-- meta-selection endpoint,
-- command finalization endpoint,
+- `/api/v2/decision-chain/{correlation_id}` traceability,
+- `/api/v2/gantt` flow/stage/equipment schedule payload,
+- `/api/v2/equipment/{equipment_id}/detail` A/B/C machine detail,
+- `/api/v2/fab/live` live control-room payload,
+- `/api/v2/harness/run-cycle` L3 budget-driven AUTO execution,
+- `/api/v2/harness/run-until` bounded execution loop,
 - decision-chain response with candidate portfolio metadata.
+
+Future deliverables:
+
+- standalone candidate portfolio endpoint,
+- standalone annotation endpoint,
+- standalone meta-selection endpoint,
+- command finalization endpoint.
 
 Acceptance:
 
@@ -140,18 +164,22 @@ Acceptance:
 
 ## Phase 7: UI Expansion
 
-Status: partially implemented in `/mes`. The control room shows L3 budget plan,
-selected candidate rows, L2 annotations, L3/L4 policy ids, A/B/C machine detail,
-Gantt drilldown, autoplay, and reset. A full candidate portfolio workbench is
-still future work.
+Status: implemented for Control Room Traceability V1 in `/mes`. The control
+room shows L3 budget plan, selected candidate rows, L2 annotations, L3/L4 policy
+ids, A/B/C machine detail, Gantt drilldown, autoplay, generate lot, and reset. A
+full candidate portfolio workbench is still future work.
 
-Deliverables:
+Delivered:
 
-- Candidate Portfolio panel,
-- C packing group selection visualization,
-- local score and upper weighted score columns,
+- selected-candidate trace panels,
+- C packing group-selection traceability,
+- selected local-score and upper-score metadata where available,
 - C machine detail,
 - evaluator checks for portfolio flow.
+
+Future deliverable:
+
+- Full selected/unselected candidate portfolio workbench.
 
 Acceptance:
 
@@ -179,14 +207,15 @@ Acceptance:
 
 Recommended next build order:
 
-1. Runtime experiment presets and config controls for balanced/A-bottleneck/
-   B-bottleneck/stress scenarios.
-2. Full Candidate Portfolio workbench that exposes selected and unselected L1
+1. Full Candidate Portfolio workbench that exposes selected and unselected L1
    candidates with L2 annotations and L3 upper scores.
-3. Explicit FeatureSnapshot persistence/indexing for every decision cycle.
-4. Lot/wafer genealogy views linking command, equipment, recipe/APC, QA result,
+2. Runtime experiment presets and config controls for balanced/A-bottleneck/
+   B-bottleneck/stress scenarios.
+3. Duplicate same-cycle reservation locks for multi-command AUTO cycles.
+4. Explicit FeatureSnapshot persistence/indexing for every decision cycle.
+5. Lot/wafer genealogy views linking command, equipment, recipe/APC, QA result,
    and event history.
-5. Recipe/APC command endpoints and operator hold/release/approval workflows.
+6. Recipe/APC command endpoints and operator hold/release/approval workflows.
 
 ## Phase 9: Operator Workflow And Production Boundaries
 
@@ -237,7 +266,8 @@ Do not remove `DefaultMetaScheduler` immediately. It remains:
 - regression comparator,
 - source of current A/B/C policy behavior.
 
-The layered MES policy stack now runs beside it. Once the MES path is mature,
+The layered MES policy stack now runs beside it and is the active `/mes` runtime
+decision path. Once the MES path is mature,
 compare:
 
 - legacy meta scheduler KPI,

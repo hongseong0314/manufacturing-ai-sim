@@ -1,7 +1,7 @@
 # Layered AI Decision Architecture
 
 Status: canonical  
-Last updated: 2026-05-06
+Last updated: 2026-05-10
 
 ## Core Decision Model
 
@@ -133,13 +133,14 @@ For A:
 ```python
 {
     "candidate_id": "CAND_A_001",
-    "recipe_id": "SIM_A_MEDIUM_APC",
-    "recipe": [12.0, 2.5, 1.2],
-    "parameters": {"temp": 12.0, "flow": 2.5, "duration": 1.2},
+    "recipe_id": "SIM_A_BASE",
+    "recipe": [10.0, 2.0, 1.0],
+    "parameters": {"temp": 10.0, "flow": 2.0, "duration": 1.0},
     "replace_consumable": False,
     "predicted_qa": 49.8,
     "target_spec": {"low": 47.1, "high": 52.9},
-    "apc_policy": "A_SPEC_WINDOW_GRID_SEARCH"
+    "apc_mode": "L2_PRESELECT_ANNOTATION",
+    "apc_policy": "A_BASE_PRESELECT"
 }
 ```
 
@@ -151,7 +152,8 @@ For B:
     "recipe_id": "SIM_B_DEFAULT",
     "recipe": [50.0, 50.0, 30.0],
     "replace_solution": False,
-    "predicted_risk": "LOW"
+    "predicted_risk": "LOW",
+    "apc_mode": "L2_PRESELECT_ANNOTATION"
 }
 ```
 
@@ -160,10 +162,13 @@ For C:
 ```python
 {
     "candidate_id": "CAND_C_ALPHA_001",
+    "recipe_id": "SIM_C_NO_RECIPE",
+    "recipe": [],
     "pack_quality_prediction": 72.1,
     "compatibility": 0.98,
     "pack_mode": "STANDARD",
-    "quality_risk": "LOW"
+    "quality_risk": "LOW",
+    "apc_mode": "L2_PRESELECT_ANNOTATION"
 }
 ```
 
@@ -228,6 +233,20 @@ L4 defines the system objective weights and governance mode.
 L4 should be stable across a planning interval. It does not need to change every
 simulator tick unless the system objective changes.
 
+The current L4 baseline is `RuleBasedL4ObjectivePolicy`. It uses due-date
+pressure, tardiness, and total wait pressure to choose one of:
+
+- `OBJ_DUE_DATE_RECOVERY`,
+- `OBJ_THROUGHPUT_FIRST`,
+- `OBJ_RULE_ONLY_BALANCED`.
+
+The current L3 baseline is `CandidatePortfolioL3MetaSchedulerPolicy`. It scores
+annotated L1 candidates using local candidate score, due-date pressure,
+objective weights, WIP/rework pressure, and selected stage constraints. It
+returns selected stage, selected candidate ids, selected group key, stage
+priorities, dispatch budgets, budget candidate ids, score components, and
+constraints.
+
 ## Recommendation Chain
 
 The audit chain remains:
@@ -249,11 +268,25 @@ Implemented MES path:
     -> L1 finalizes candidate -> L2 finalizes process fields -> validation
 ```
 
-`src/agents/factory.py` now builds a `MESPolicyStack` with L1, L2, L3, and L4
+`src/agents/factory.py` builds a `MESPolicyStack` with L1, L2, L3, and L4
 policy slots. The default L3 policy is `L3_CANDIDATE_PORTFOLIO_RULE`, and the
-default L4 policy is `L4_CYCLE_WEIGHT_RULE`. `MESPlannerAgent` remains the
-audit orchestrator for plan creation, but it delegates objective selection and
-meta scheduling to those policy objects.
+default L4 policy is `L4_CYCLE_WEIGHT_RULE`. `MESPlannerAgent` lives in
+`src/mes/harnessing/planner.py` and remains the audit orchestrator for plan
+creation, but it delegates objective selection and meta scheduling to those
+policy objects.
+
+Current active config keys:
+
+| Layer | Config key | Accepted current values | Default |
+|---|---|---|---|
+| L1 A | `scheduler_A` | `fifo`, `adaptive`, `rl` | `fifo` |
+| L1 B | `scheduler_B` | `fifo`, `rule-based`, `rl` | `fifo` |
+| L1 C | `packing_C` | `fifo`, `random`, `greedy` | `fifo` |
+| C candidate mode | `mes_l1_C` | `fifo`, `random`, `greedy`, `grouped` | `packing_C` |
+| L2 A | `tuner_A` | `fifo`, `rule-based`, `adaptive`, `rl` | `rule-based` |
+| L2 B | `tuner_B` | `fifo`, `rule-based`, `rl` | `rule-based` |
+| L3 | `meta_scheduler_L3` | `candidate-portfolio-rule`, `rule-based`, `default` | `candidate-portfolio-rule` |
+| L4 | `objective_policy_L4` | `cycle-weight-rule`, `rule-based`, `default` | `cycle-weight-rule` |
 
 ## Layer Boundary Rules
 

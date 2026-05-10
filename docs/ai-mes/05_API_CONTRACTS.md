@@ -8,7 +8,17 @@ Last updated: 2026-05-10
 This document defines the simulator-backed MES API surface and the target API
 contracts needed for the layered AI architecture.
 
-The current implementation lives in `src/mes/api.py`.
+The current route implementation lives in `src/mes/api.py`. Route functions are
+thin and delegate runtime behavior to `src/mes/runtime/*`.
+
+| Runtime concern | Module |
+|---|---|
+| lifecycle/reset | `src/mes/runtime/context.py` |
+| run-cycle/run-until/autoplay/generate lot | `src/mes/runtime/simulation_control.py` |
+| live control-room state | `src/mes/runtime/live_state.py` |
+| decision-chain traceability | `src/mes/runtime/decision_trace.py` |
+| equipment detail | `src/mes/runtime/equipment_detail.py` |
+| Gantt state | `src/mes/runtime/gantt.py` |
 
 ## Current Read APIs
 
@@ -22,7 +32,7 @@ The current implementation lives in `src/mes/api.py`.
 | `GET /api/v1/lots` | Lot list from store-backed runtime snapshot |
 | `GET /api/v1/wafers` | Wafer list, optional `lot_id` filter |
 | `GET /api/v1/recipes` | Recipe list, optional `operation_id` filter |
-| `GET /api/v1/dispatch/candidates?stage=A` | Rule-only dispatch candidates |
+| `GET /api/v1/dispatch/candidates?stage=A` | L1 policy-stack dispatch candidates |
 | `GET /api/v1/ai/recommendations` | Recommendation records, optional `correlation_id` |
 | `GET /api/v1/events` | Event records, optional `correlation_id` |
 | `GET /api/v1/commands` | Command records, optional `correlation_id` |
@@ -35,7 +45,7 @@ The current implementation lives in `src/mes/api.py`.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/v1/harness/run` | Run harness preview for one stage or AUTO |
+| `POST /api/v1/harness/run` | Preview one stage, or execute L3-budget AUTO |
 | `POST /api/v1/rules/validate` | Validate recommendation payloads |
 | `POST /api/v1/commands/track-in/preview` | Preview track-in command |
 | `POST /api/v1/commands/track-in/execute` | Execute validated command |
@@ -47,7 +57,36 @@ The current implementation lives in `src/mes/api.py`.
 | `POST /api/v2/simulation/autoplay/stop` | Disable autoplay |
 | `GET /api/v2/simulation/autoplay/status` | Poll autoplay and optionally step |
 
-## Target Layered AI APIs
+## Current V2 Payload Summary
+
+`POST /api/v2/harness/run-cycle` with `target_stage="AUTO"` returns an L3
+budget-driven execution payload:
+
+```python
+{
+    "mode": "AUTO",
+    "selection_source": "l3_budget_plan",
+    "budget_plan": {
+        "selected_candidate_ids": ["CAND_..."],
+        "dispatch_budgets": {"A": 5, "B": 0, "C": 0},
+        "budget_candidate_ids": {"A": ["CAND_..."], "B": [], "C": []}
+    },
+    "combined_actions": {"A": {...}, "B": {}, "C": {}},
+    "cycles": [...]
+}
+```
+
+`GET /api/v2/decision-chain/{correlation_id}` returns the persisted audit chain
+and a `traceability` block with L4/L3 policy ids, selected candidates, final
+L1/L2 actions, and validated command.
+
+`GET /api/v2/gantt` returns `flow`, `rows`, `bars`, `stage_views`, `horizon`,
+and `legend`.
+
+`GET /api/v2/equipment/{equipment_id}/detail` returns A/B APC quality trends or
+C packing composition quality, including material/color counts for C.
+
+## Future Standalone Layered AI APIs
 
 The current API can run the baseline chain. The target architecture needs APIs
 that expose candidate portfolios before final upper-layer selection.
@@ -211,7 +250,9 @@ C: 3 equipment, batch_size=4, process_time=2, max_packs_per_step=3
 
 The UI exposes Start, Stop, Run cycle, Generate lot, and Reset. Reset calls
 `POST /api/v2/simulation/reset` and refreshes live state.
-when the API request is valid but the recommendation is not executable.
+
+Rule rejects should remain successful HTTP responses when the request shape is
+valid but the recommendation is not executable.
 
 ## API Evolution Rules
 

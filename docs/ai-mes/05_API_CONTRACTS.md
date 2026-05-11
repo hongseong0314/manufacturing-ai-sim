@@ -343,10 +343,129 @@ The UI exposes Start, Stop, Run cycle, Generate lot, and Reset. Reset calls
 Rule rejects should remain successful HTTP responses when the request shape is
 valid but the recommendation is not executable.
 
+## AI Developer Experiment APIs
+
+Policy Experiment Runner V1 is intentionally a development API. It captures an
+immutable scenario snapshot from the current simulator state, replays that
+snapshot through multiple factory-built policy stacks, and returns comparison
+payloads without mutating the live simulator.
+
+### Capture Scenario
+
+```http
+POST /api/v2/ai-dev/scenarios/capture
+```
+
+Response shape:
+
+```python
+{
+    "scenario_id": "SCN_...",
+    "time": 37,
+    "source_correlation_id": "CORR_...",
+    "config": {"scheduler_A": "fifo", "tuner_A": "rule-based"},
+    "decision_state": {"A": {}, "B": {}, "C": {}, "tasks": {}},
+    "tasks": {},
+    "A": {},
+    "B": {},
+    "C": {},
+    "equipment": [],
+    "kpis": {}
+}
+```
+
+### List Scenarios
+
+```http
+GET /api/v2/ai-dev/scenarios
+```
+
+Returns summary rows with `scenario_id`, `time`, `task_count`, `queue_sizes`,
+and `equipment_count`.
+
+### List Policy Variants
+
+```http
+GET /api/v2/ai-dev/policy-variants
+```
+
+V1 variants are config/objective presets:
+
+- `baseline_fifo_rule`
+- `l3_due_date_aggressive`
+- `l3_throughput_aggressive`
+- `c_grouped_packing`
+- `bottleneck_relief`
+
+### Run Experiment
+
+```http
+POST /api/v2/ai-dev/experiments/run
+```
+
+Request:
+
+```python
+{
+    "scenario_id": "SCN_...",
+    "variant_ids": ["baseline_fifo_rule", "c_grouped_packing"]
+}
+```
+
+Response:
+
+```python
+{
+    "experiment_id": "EXP_...",
+    "scenario_id": "SCN_...",
+    "count": 2,
+    "results": [
+        {
+            "variant_id": "baseline_fifo_rule",
+            "correlation_id": "CORR_EXP_...",
+            "l4_objective_id": "OBJ_THROUGHPUT_FIRST",
+            "selected_stage": "A",
+            "selected_candidate_id": "CAND_A_...",
+            "candidate_count": 5,
+            "local_score": 17.8,
+            "upper_score": 23.9,
+            "quality_risk": "LOW",
+            "command_valid": True,
+            "validation_status": "PASSED",
+            "portfolio": {"items": []},
+            "score_components": {},
+            "kpi_delta": {
+                "selected_task_count": 3,
+                "expected_wip_reduction": 3,
+                "expected_completion_delta": 0,
+                "command_count_delta": 1
+            }
+        }
+    ],
+    "comparison": {
+        "best_variant_id": "baseline_fifo_rule",
+        "best_reason": "highest_upper_score_then_expected_wip_reduction",
+        "decision_diff": []
+    }
+}
+```
+
+### Read Experiment
+
+```http
+GET /api/v2/ai-dev/experiments/{experiment_id}
+```
+
+Returns the stored in-memory experiment payload. V1 experiment storage is reset
+with the runtime and is not part of SQLite genealogy.
+
 ## API Evolution Rules
 
 - Keep `/api/v1/*` stable for current UI.
 - Add new candidate-portfolio endpoints without breaking existing harness APIs.
 - Keep `/api/v2/*` simulation control endpoints as MVP runtime controls.
+- Keep `/api/v2/ai-dev/*` as explicit development endpoints. They may replay
+  frozen state, but they must not mutate the live simulator except scenario
+  capture metadata stored on the API context.
 - Do not expose direct simulator mutations except through validated commands or
   explicit development endpoints such as task generation/reset.

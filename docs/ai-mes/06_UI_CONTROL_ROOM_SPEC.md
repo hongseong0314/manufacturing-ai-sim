@@ -215,7 +215,12 @@ Current implementation:
   risk/recipe annotation, L3 rejection reason, and command status.
 - `/mes#ai-dev` shows AI Developer Console V1 for policy-stack visibility,
   decision-cycle browsing, candidate portfolio lab, score breakdown, L2
-  annotation inspection, and empty portfolio diagnostics.
+  annotation inspection, empty portfolio diagnostics, and Policy Experiment
+  Runner V1.
+- Policy Experiment Runner captures the current fab state as a scenario, lets
+  AI developers select policy variants, replays each variant offline, and shows
+  selected stage/candidate, local score, upper score, L2 risk, command validity,
+  expected KPI delta, and a compact decision diff.
 - Candidate Portfolio defaults to the latest actionable portfolio. If the most
   recent cycle is empty, the UI keeps the last actionable portfolio visible and
   exposes the empty reason/diagnostics in the developer console.
@@ -230,8 +235,8 @@ Current limitations:
 
 Next UI milestone:
 
-1. Add runtime experiment preset controls for balanced/A-bottleneck/B-bottleneck
-   batch scenarios.
+1. Add richer experiment scenario presets for balanced/A-bottleneck/B-bottleneck
+   batch states.
 2. Add richer candidate detail drilldown for C packing composition and A/B APC
    implications.
 3. Show selected group separately from selected pack.
@@ -263,7 +268,7 @@ Avoid vague phrases:
 | KPI strip | `/api/v1/kpis/fab` | same plus AI KPI |
 | Stage board | `/api/v1/wip`, `/api/v1/equipment` | same |
 | Candidate table | `/api/v2/candidate-portfolio/latest`, `/api/v2/candidate-portfolio/{correlation_id}` | same plus richer drilldown |
-| AI developer console | `/api/v2/ai-dev/policy-stack`, `/api/v2/ai-dev/decision-cycles`, `/api/v2/ai-dev/candidate-portfolio/{correlation_id}` | same plus experiment comparison |
+| AI developer console | `/api/v2/ai-dev/policy-stack`, `/api/v2/ai-dev/decision-cycles`, `/api/v2/ai-dev/candidate-portfolio/{correlation_id}`, `/api/v2/ai-dev/scenarios`, `/api/v2/ai-dev/policy-variants`, `/api/v2/ai-dev/experiments/*` | same plus scenario preset library |
 | Decision chain | `/api/v2/decision-chain/{correlation_id}` | same with portfolio metadata |
 | Rule gate | `/api/v1/rules/validate` | same plus layer consistency reasons |
 | Command preview | `/api/v1/commands/track-in/preview` | `/api/v1/commands/finalize` |

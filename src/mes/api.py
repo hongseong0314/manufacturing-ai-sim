@@ -22,6 +22,14 @@ from src.mes.runtime.candidate_portfolio import (
 )
 from src.mes.runtime.decision_trace import decision_chain as build_decision_chain
 from src.mes.runtime.equipment_detail import equipment_detail as build_equipment_detail
+from src.mes.runtime.experiments import (
+    capture_scenario,
+    get_experiment,
+    list_experiments,
+    list_policy_variants,
+    list_scenarios,
+    run_experiment,
+)
 from src.mes.runtime.gantt import gantt_state
 from src.mes.runtime.live_state import fab_kpis, live_fab_state, mes_state
 from src.mes.runtime.simulation_control import (
@@ -250,6 +258,42 @@ def ai_dev_decision_cycles(limit: int = Query(50, ge=1, le=200)) -> Dict[str, An
 @app.get("/api/v2/ai-dev/candidate-portfolio/{correlation_id}")
 def ai_dev_portfolio(correlation_id: str) -> Dict[str, Any]:
     return ai_dev_candidate_portfolio(context, correlation_id)
+
+
+@app.post("/api/v2/ai-dev/scenarios/capture")
+def ai_dev_capture_scenario() -> Dict[str, Any]:
+    return capture_scenario(context)
+
+
+@app.get("/api/v2/ai-dev/scenarios")
+def ai_dev_scenarios() -> Dict[str, Any]:
+    return list_scenarios(context)
+
+
+@app.get("/api/v2/ai-dev/policy-variants")
+def ai_dev_policy_variants() -> Dict[str, Any]:
+    return list_policy_variants()
+
+
+@app.post("/api/v2/ai-dev/experiments/run")
+def ai_dev_run_experiment(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, Any]:
+    try:
+        return run_experiment(context, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/v2/ai-dev/experiments")
+def ai_dev_experiments() -> Dict[str, Any]:
+    return list_experiments(context)
+
+
+@app.get("/api/v2/ai-dev/experiments/{experiment_id}")
+def ai_dev_experiment(experiment_id: str) -> Dict[str, Any]:
+    try:
+        return get_experiment(context, experiment_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/v2/equipment/{equipment_id}/detail")

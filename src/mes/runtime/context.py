@@ -48,6 +48,8 @@ class MESAPIContext:
         self.last_generation_time: Optional[int] = None
         self.last_correlation_id: Optional[str] = None
         self.last_cycle: Optional[Dict[str, Any]] = None
+        self.scenario_snapshots: Dict[str, Dict[str, Any]] = {}
+        self.experiment_results: Dict[str, Dict[str, Any]] = {}
 
     def reset_runtime(self) -> None:
         self.env = build_default_env()
@@ -57,3 +59,5 @@ class MESAPIContext:
         self.last_generation_time = None
         self.last_correlation_id = None
         self.last_cycle = None
+        self.scenario_snapshots.clear()
+        self.experiment_results.clear()

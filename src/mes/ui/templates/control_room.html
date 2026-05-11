@@ -176,6 +176,37 @@
               <div class="panel-header compact-header"><h2>Empty Diagnostics</h2><span id="ai-dev-empty-status">-</span></div>
               <div class="point-detail" id="ai-dev-empty-diagnostics"></div>
             </div>
+            <div class="panel-lite ai-dev-wide" id="ai-dev-experiment-runner">
+              <div class="panel-header compact-header">
+                <h2>Policy Experiment Runner</h2>
+                <span id="experiment-status">No experiment</span>
+              </div>
+              <div class="experiment-controls">
+                <button class="button compact" id="capture-scenario" type="button">Capture Current Scenario</button>
+                <select id="experiment-scenario" aria-label="Scenario"></select>
+                <button class="button compact primary" id="run-experiment" type="button">Run Comparison</button>
+              </div>
+              <div class="variant-grid" id="policy-variant-list"></div>
+              <div class="table-wrap">
+                <table class="experiment-table">
+                  <thead>
+                    <tr>
+                      <th>Variant</th>
+                      <th>Objective</th>
+                      <th>Stage</th>
+                      <th>Candidate</th>
+                      <th>Local</th>
+                      <th>Upper</th>
+                      <th>L2 Risk</th>
+                      <th>Command</th>
+                      <th>KPI Delta</th>
+                    </tr>
+                  </thead>
+                  <tbody id="experiment-result-body"></tbody>
+                </table>
+              </div>
+              <div class="point-detail" id="experiment-comparison-inspector"></div>
+            </div>
           </div>
         </section>
         <section class="split-grid" id="equipment">

@@ -11,6 +11,9 @@
     let selectedAiDevCorrelation = null;
     let selectedAiDevCandidateId = null;
     let lastAiDevPortfolio = null;
+    let selectedExperimentScenarioId = null;
+    let selectedExperimentVariantIds = new Set(["baseline_fifo_rule", "c_grouped_packing"]);
+    let lastExperiment = null;
     const AI_DEV_CYCLE_LIMIT = 25;
 
     const statusClass = (status) => {
@@ -50,13 +53,22 @@
 
     async function loadAiDevSummary() {
       try {
-        const [policyStack, decisionCycles] = await Promise.all([
+        const [policyStack, decisionCycles, policyVariants, scenarios, experiments] = await Promise.all([
           fetch("/api/v2/ai-dev/policy-stack").then(r => r.json()),
           fetch(`/api/v2/ai-dev/decision-cycles?limit=${AI_DEV_CYCLE_LIMIT}`).then(r => r.json()),
+          fetch("/api/v2/ai-dev/policy-variants").then(r => r.json()),
+          fetch("/api/v2/ai-dev/scenarios").then(r => r.json()),
+          fetch("/api/v2/ai-dev/experiments").then(r => r.json()),
         ]);
-        return { policyStack, decisionCycles };
+        return { policyStack, decisionCycles, policyVariants, scenarios, experiments };
       } catch (error) {
-        return { policyStack: {}, decisionCycles: { items: [] } };
+        return {
+          policyStack: {},
+          decisionCycles: { items: [] },
+          policyVariants: { items: [] },
+          scenarios: { items: [] },
+          experiments: { items: [] },
+        };
       }
     }
 
@@ -455,6 +467,7 @@
       document.getElementById("ai-dev-policy-factory").textContent = policy.factory_name || "-";
       renderAiDevPolicyStack(policy);
       renderAiDevCycles(cycles);
+      renderExperimentRunner(aiDev);
       const fallbackPortfolio = live.candidate_portfolio || live.active_chain?.candidate_portfolio || {};
       const activePortfolio = lastAiDevPortfolio || fallbackPortfolio;
       if (!selectedAiDevCorrelation && activePortfolio.correlation_id) {
@@ -599,6 +612,80 @@
           }).join("")}
           <dt>Latest empty</dt><dd><code>${escapeText(portfolio.latest_empty_correlation_id || "-")}</code></dd>
           <dt>Last actionable</dt><dd><code>${escapeText(portfolio.last_actionable_correlation_id || "-")}</code></dd>
+        </dl>`;
+    }
+
+    function renderExperimentRunner(aiDev) {
+      const variants = aiDev.policyVariants?.items || [];
+      const scenarios = aiDev.scenarios?.items || [];
+      if (!selectedExperimentScenarioId && scenarios.length) {
+        selectedExperimentScenarioId = scenarios[0].scenario_id;
+      }
+      const scenarioSelect = document.getElementById("experiment-scenario");
+      scenarioSelect.innerHTML = scenarios.map(scenario => `
+        <option value="${escapeText(scenario.scenario_id)}" ${scenario.scenario_id === selectedExperimentScenarioId ? "selected" : ""}>
+          ${escapeText(`${scenario.scenario_id} · t=${scenario.time} · tasks ${scenario.task_count}`)}
+        </option>
+      `).join("") || "<option value=''>No scenario captured</option>";
+      document.getElementById("policy-variant-list").innerHTML = variants.map(variant => {
+        const checked = selectedExperimentVariantIds.has(variant.variant_id) ? "checked" : "";
+        return `<div class="variant-option">
+          <label>
+            <input type="checkbox" class="experiment-variant" value="${escapeText(variant.variant_id)}" ${checked}>
+            <span>${escapeText(variant.label || variant.variant_id)}</span>
+          </label>
+          <span>${escapeText(variant.description || "")}</span>
+        </div>`;
+      }).join("") || "<span class='kpi-note'>No policy variants registered.</span>";
+      document.querySelectorAll(".experiment-variant").forEach(input => {
+        input.onchange = () => {
+          if (input.checked) {
+            selectedExperimentVariantIds.add(input.value);
+          } else {
+            selectedExperimentVariantIds.delete(input.value);
+          }
+        };
+      });
+      renderExperimentResults(lastExperiment);
+    }
+
+    function renderExperimentResults(experiment) {
+      const results = experiment?.results || [];
+      document.getElementById("experiment-status").textContent = experiment
+        ? `${experiment.experiment_id} · ${results.length} variants`
+        : "No experiment";
+      document.getElementById("experiment-result-body").innerHTML = results.map(row => {
+        const delta = row.kpi_delta || {};
+        return `<tr class="${row.variant_id === experiment?.comparison?.best_variant_id ? "portfolio-selected" : ""}">
+          <td><code>${escapeText(row.variant_id || "-")}</code></td>
+          <td>${escapeText(row.l4_objective_id || "-")}</td>
+          <td>${escapeText(row.selected_stage || "-")}</td>
+          <td><code>${escapeText(row.selected_candidate_id || "-")}</code></td>
+          <td>${escapeText(formatMetric(row.local_score))}</td>
+          <td><strong>${escapeText(formatMetric(row.upper_score))}</strong></td>
+          <td>${escapeText(row.quality_risk || "-")}</td>
+          <td><span class="${statusClass(row.command_valid ? "PASS" : "REJECTED")}">${escapeText(row.validation_status || "-")}</span></td>
+          <td>${escapeText(`wip ${delta.expected_wip_reduction || 0} · done ${delta.expected_completion_delta || 0}`)}</td>
+        </tr>`;
+      }).join("") || "<tr><td colspan='9'>Capture a scenario and run a comparison.</td></tr>";
+      renderExperimentInspector(experiment);
+    }
+
+    function renderExperimentInspector(experiment) {
+      const target = document.getElementById("experiment-comparison-inspector");
+      if (!experiment) {
+        target.innerHTML = "<span class='kpi-note'>No comparison result yet.</span>";
+        return;
+      }
+      const comparison = experiment.comparison || {};
+      const rows = comparison.decision_diff || [];
+      target.innerHTML = `
+        <dl>
+          <dt>Scenario</dt><dd><code>${escapeText(experiment.scenario_id || "-")}</code></dd>
+          <dt>Best variant</dt><dd><code>${escapeText(comparison.best_variant_id || "-")}</code> · ${escapeText(comparison.best_reason || "-")}</dd>
+          <dt>Decision diff</dt><dd>${rows.map(row =>
+            `${escapeText(row.variant_id || "-")}: ${escapeText(row.selected_stage || "-")} · upper ${escapeText(formatMetric(row.upper_score))} · ${escapeText(row.command_valid ? "valid" : "invalid")}`
+          ).join("<br>")}</dd>
         </dl>`;
     }
 
@@ -855,6 +942,26 @@
     document.getElementById("portfolio-selected-only").onchange = (event) => {
       portfolioSelectedOnly = Boolean(event.target.checked);
       renderPortfolio(lastLive?.candidate_portfolio || lastLive?.active_chain?.candidate_portfolio || {});
+    };
+    document.getElementById("experiment-scenario").onchange = (event) => {
+      selectedExperimentScenarioId = event.target.value || null;
+    };
+    document.getElementById("capture-scenario").onclick = async () => {
+      const scenario = await postJSON("/api/v2/ai-dev/scenarios/capture", {});
+      selectedExperimentScenarioId = scenario.scenario_id;
+      refresh(0);
+    };
+    document.getElementById("run-experiment").onclick = async () => {
+      if (!selectedExperimentScenarioId) {
+        const scenario = await postJSON("/api/v2/ai-dev/scenarios/capture", {});
+        selectedExperimentScenarioId = scenario.scenario_id;
+      }
+      const variantIds = Array.from(selectedExperimentVariantIds);
+      lastExperiment = await postJSON("/api/v2/ai-dev/experiments/run", {
+        scenario_id: selectedExperimentScenarioId,
+        variant_ids: variantIds.length ? variantIds : ["baseline_fifo_rule"],
+      });
+      renderExperimentResults(lastExperiment);
     };
     window.addEventListener("hashchange", updateNavState);
     setInterval(() => refresh(running ? Number(document.getElementById("speed").value) : 0), 1000);

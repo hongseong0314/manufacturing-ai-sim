@@ -170,11 +170,11 @@ Acceptance:
 
 ## Phase 7: UI Expansion
 
-Status: implemented for Control Room Traceability V1 and Candidate Portfolio
-Workbench V1 in `/mes`, plus AI Developer Console V1 in `/mes#ai-dev`. The
+Status: implemented for Control Room Traceability V1, Candidate Portfolio
+Workbench V1, AI Developer Console V1, and Policy Experiment Runner V1. The
 control room shows L3 budget plan, selected and rejected candidate rows, L2
 annotations, L3/L4 policy ids, A/B/C machine detail, Gantt drilldown, autoplay,
-generate lot, and reset.
+generate lot, reset, and offline policy experiment comparison.
 
 Delivered:
 
@@ -186,6 +186,8 @@ Delivered:
 - empty portfolio diagnostics,
 - AI Developer Console policy stack, decision cycle browser, portfolio lab,
   score breakdown, and L2 annotation inspector,
+- Policy Experiment Runner scenario capture, policy variant registry, offline
+  replay, result comparison, and decision diff inspector,
 - C packing group-selection traceability,
 - selected local-score and upper-score metadata where available,
 - C machine detail,
@@ -193,7 +195,8 @@ Delivered:
 
 Future deliverable:
 
-- Runtime experiment preset controls and comparison views.
+- Scenario preset library for balanced/A-bottleneck/B-bottleneck/stress states.
+- Learning-policy adapters behind the existing variant registry.
 
 Acceptance:
 
@@ -221,13 +224,14 @@ Acceptance:
 
 Recommended next build order:
 
-1. Runtime experiment presets and config controls for balanced/A-bottleneck/
-   B-bottleneck/stress scenarios.
+1. Scenario preset library and config controls for balanced/A-bottleneck/
+   B-bottleneck/stress experiments.
 2. Duplicate same-cycle reservation locks for multi-command AUTO cycles.
-3. Explicit FeatureSnapshot persistence/indexing for every decision cycle.
-4. Lot/wafer genealogy views linking command, equipment, recipe/APC, QA result,
+3. Learning-policy adapter contract for L1/L2/L3/L4 experiment variants.
+4. Explicit FeatureSnapshot persistence/indexing for every decision cycle.
+5. Lot/wafer genealogy views linking command, equipment, recipe/APC, QA result,
    and event history.
-5. Recipe/APC command endpoints and operator hold/release/approval workflows.
+6. Recipe/APC command endpoints and operator hold/release/approval workflows.
 
 ## Phase 9: Operator Workflow And Production Boundaries
 

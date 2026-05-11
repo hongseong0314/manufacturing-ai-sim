@@ -276,6 +276,31 @@ def test_ai_dev_candidate_portfolio_endpoint_includes_score_and_l2_details():
     assert payload['objective_weights']
 
 
+def test_ai_dev_experiment_api_captures_scenarios_and_runs_comparison():
+    capture = client.post('/api/v2/ai-dev/scenarios/capture')
+    assert capture.status_code == 200
+    scenario = capture.json()
+
+    variants = client.get('/api/v2/ai-dev/policy-variants').json()
+    assert variants['count'] >= 3
+
+    run = client.post(
+        '/api/v2/ai-dev/experiments/run',
+        json={
+            'scenario_id': scenario['scenario_id'],
+            'variant_ids': ['baseline_fifo_rule', 'c_grouped_packing'],
+        },
+    )
+    assert run.status_code == 200
+    experiment = run.json()
+    assert experiment['count'] == 2
+    assert experiment['results'][0]['portfolio']['items']
+
+    readback = client.get(f"/api/v2/ai-dev/experiments/{experiment['experiment_id']}")
+    assert readback.status_code == 200
+    assert readback.json()['experiment_id'] == experiment['experiment_id']
+
+
 def test_control_room_html_contains_ai_dev_console_mount():
     html = client.get('/mes').text
 
@@ -288,6 +313,10 @@ def test_control_room_html_contains_ai_dev_console_mount():
     assert 'cycle-table-wrap' in html
     assert 'policy-layer-detail' in html
     assert 'AI_DEV_CYCLE_LIMIT = 25' in html
+    assert 'ai-dev-experiment-runner' in html
+    assert 'capture-scenario' in html
+    assert 'run-experiment' in html
+    assert 'experiment-result-body' in html
 
 
 def test_v2_run_until_stops_with_max_cycles_or_conditions():

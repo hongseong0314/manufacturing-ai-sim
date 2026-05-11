@@ -208,12 +208,20 @@ Current implementation:
 - UI polls live endpoints.
 - It already shows WIP, equipment, decision chain, events, Gantt, autoplay,
   reset, A/B machine quality detail, C machine packing detail, L3 budget plan,
-  selected candidates, L2 annotations, and L3/L4 policy ids.
+  selected candidates, L2 annotations, L3/L4 policy ids, and a Candidate
+  Portfolio workbench.
+- The Candidate Portfolio workbench shows selected and rejected candidates,
+  stage filtering, selected-only filtering, local score, upper score, L2
+  risk/recipe annotation, L3 rejection reason, and command status.
+- `/mes#ai-dev` shows AI Developer Console V1 for policy-stack visibility,
+  decision-cycle browsing, candidate portfolio lab, score breakdown, L2
+  annotation inspection, and empty portfolio diagnostics.
+- Candidate Portfolio defaults to the latest actionable portfolio. If the most
+  recent cycle is empty, the UI keeps the last actionable portfolio visible and
+  exposes the empty reason/diagnostics in the developer console.
 
 Current limitations:
 
-- It shows selected candidate portfolio rows but not the full unselected
-  bottom-up portfolio as a standalone workbench.
 - It only lightly distinguishes L3/L4 group selection from L1 final pack choice.
 - Genealogy view is not implemented.
 - Operator approval workflows are not implemented.
@@ -222,13 +230,12 @@ Current limitations:
 
 Next UI milestone:
 
-1. Add a full Candidate Portfolio panel for C packing and A/B dispatch.
-2. Show group-level rows: customer/product/material/due-date group.
-3. Show local candidate score vs upper-layer weighted score.
-4. Show selected group separately from selected pack.
-5. Add operator-facing Rule Engine consistency and rejection detail.
-6. Add runtime experiment preset controls for balanced/A-bottleneck/B-bottleneck
+1. Add runtime experiment preset controls for balanced/A-bottleneck/B-bottleneck
    batch scenarios.
+2. Add richer candidate detail drilldown for C packing composition and A/B APC
+   implications.
+3. Show selected group separately from selected pack.
+4. Add operator-facing Rule Engine consistency and rejection detail.
 
 ## UX Copy Rules
 
@@ -255,7 +262,8 @@ Avoid vague phrases:
 |---|---|---|
 | KPI strip | `/api/v1/kpis/fab` | same plus AI KPI |
 | Stage board | `/api/v1/wip`, `/api/v1/equipment` | same |
-| Candidate table | `/api/v1/dispatch/candidates` | `/api/v1/ai/candidates` |
+| Candidate table | `/api/v2/candidate-portfolio/latest`, `/api/v2/candidate-portfolio/{correlation_id}` | same plus richer drilldown |
+| AI developer console | `/api/v2/ai-dev/policy-stack`, `/api/v2/ai-dev/decision-cycles`, `/api/v2/ai-dev/candidate-portfolio/{correlation_id}` | same plus experiment comparison |
 | Decision chain | `/api/v2/decision-chain/{correlation_id}` | same with portfolio metadata |
 | Rule gate | `/api/v1/rules/validate` | same plus layer consistency reasons |
 | Command preview | `/api/v1/commands/track-in/preview` | `/api/v1/commands/finalize` |

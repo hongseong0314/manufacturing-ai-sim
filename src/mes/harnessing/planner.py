@@ -172,6 +172,41 @@ class MESPlannerAgent:
                 else "stage_priority_maintained_until_next_trigger"
             ],
         )
+        portfolio_snapshot = self.service.create_feature_snapshot(
+            decision_state,
+            layer_id="PORTFOLIO",
+            correlation_id=resolved_correlation_id,
+            features={
+                "objective_id": objective_action["objective_id"],
+                "l4_recommendation_id": objective.recommendation_id,
+                "l3_recommendation_id": stage_priority.recommendation_id,
+                "l4_policy_id": policy_stack.l4_policy_id,
+                "l3_policy_id": policy_stack.l3_policy_id,
+                "selected_candidate_id": selected_candidate_id,
+                "selected_candidate_ids": selected_candidate_ids,
+                "selected_group_key": selected_group_key,
+                "diagnostics": self._portfolio_diagnostics(
+                    decision_state,
+                    l3_candidate_actions,
+                ),
+                "empty_reason": self._empty_reason(
+                    decision_state,
+                    l3_candidate_actions,
+                    selected_candidate_id,
+                ),
+                "candidates": self._portfolio_snapshot_rows(
+                    resolved_correlation_id,
+                    l3_candidate_actions,
+                    objective_action,
+                    selected_candidate_id,
+                    selected_candidate_ids,
+                    {
+                        "L4": objective.recommendation_id,
+                        "L3": stage_priority.recommendation_id,
+                    },
+                ),
+            },
+        )
 
         self._last_objective_action = copy.deepcopy(objective_action)
         self._last_objective_id = str(objective_action["objective_id"])
@@ -181,7 +216,7 @@ class MESPlannerAgent:
             target_stage=resolved_stage,
             objective=objective,
             stage_priority=stage_priority,
-            feature_snapshots=[l4_snapshot, l3_snapshot],
+            feature_snapshots=[l4_snapshot, l3_snapshot, portfolio_snapshot],
             candidate_portfolio=portfolio,
         )
 
@@ -198,3 +233,170 @@ class MESPlannerAgent:
             "task_generation_trigger_due": trigger_due,
             "planning_interval": self.planning_interval,
         }
+
+    def _portfolio_snapshot_rows(
+        self,
+        correlation_id: str,
+        candidate_actions: List[Dict[str, Any]],
+        objective_action: Dict[str, Any],
+        selected_candidate_id: Optional[str],
+        selected_candidate_ids: List[str],
+        linked_recommendation_ids: Dict[str, str],
+    ) -> List[Dict[str, Any]]:
+        selected_ids = {str(candidate_id) for candidate_id in selected_candidate_ids}
+        selected_id = str(selected_candidate_id or "")
+        rows = []
+        for candidate in candidate_actions:
+            candidate_id = str(candidate.get("candidate_id", ""))
+            selected = candidate_id == selected_id
+            budget_selected = candidate_id in selected_ids
+            upper_score = float(candidate.get("upper_score", 0.0) or 0.0)
+            features = dict(candidate.get("features", {}) or {})
+            rows.append(
+                {
+                    "correlation_id": correlation_id,
+                    "candidate_id": candidate_id,
+                    "stage": str(candidate.get("stage", "")).upper(),
+                    "candidate_type": candidate.get("candidate_type"),
+                    "group_key": dict(candidate.get("group_key") or {}),
+                    "equipment_id": candidate.get("equipment_id"),
+                    "task_uids": list(candidate.get("task_uids") or []),
+                    "local_score": float(candidate.get("local_score", 0.0) or 0.0),
+                    "local_rank": int(candidate.get("local_rank", 0) or 0),
+                    "l2_annotation": dict(candidate.get("l2_annotation") or {}),
+                    "upper_score": upper_score,
+                    "score_components": {
+                        "local_candidate_score": float(
+                            candidate.get("local_score", 0.0) or 0.0
+                        ),
+                        "due_date_pressure": float(
+                            features.get("due_date_pressure", 0.0) or 0.0
+                        ),
+                        "wip_pressure": float(features.get("batch_size", 0.0) or 0.0),
+                        "objective_weight_bonus": self._objective_weight_bonus(
+                            features,
+                            objective_action,
+                        ),
+                        "quality_risk_penalty": self._quality_risk_penalty(
+                            candidate,
+                        ),
+                        "final_upper_score": upper_score,
+                    },
+                    "selected": selected,
+                    "budget_selected": budget_selected,
+                    "rejection_reason": self._rejection_reason(selected, budget_selected),
+                    "linked_recommendation_ids": dict(linked_recommendation_ids),
+                }
+            )
+        return rows
+
+    def _rejection_reason(self, selected: bool, budget_selected: bool) -> Optional[str]:
+        if selected:
+            return None
+        if budget_selected:
+            return "budget_candidate_not_finalized"
+        return "not_selected_by_l3"
+
+    def _objective_weight_bonus(
+        self,
+        features: Dict[str, Any],
+        objective_action: Dict[str, Any],
+    ) -> float:
+        weights = dict(objective_action.get("weights", {}) or {})
+        due_pressure = float(features.get("due_date_pressure", 0.0) or 0.0)
+        batch_size = float(features.get("batch_size", 0.0) or 0.0)
+        margin_value = float(features.get("margin_value", 0.0) or 0.0)
+        return round(
+            float(weights.get("tardiness", 0.5) or 0.5) * due_pressure * 10.0
+            + float(weights.get("throughput", 1.0) or 1.0) * batch_size
+            + float(weights.get("customer_priority", 1.0) or 1.0)
+            * margin_value
+            * 5.0,
+            4,
+        )
+
+    def _quality_risk_penalty(self, candidate: Dict[str, Any]) -> float:
+        annotation = dict(candidate.get("l2_annotation", {}) or {})
+        return {
+            "LOW": 0.0,
+            "MEDIUM": 8.0,
+            "HIGH": 25.0,
+        }.get(str(annotation.get("quality_risk", "LOW")).upper(), 0.0)
+
+    def _portfolio_diagnostics(
+        self,
+        decision_state: Dict[str, Any],
+        candidate_actions: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        candidate_counts = {"A": 0, "B": 0, "C": 0}
+        for candidate in candidate_actions:
+            stage = str(candidate.get("stage", "")).upper()
+            if stage in candidate_counts:
+                candidate_counts[stage] += 1
+        return {
+            "stages": {
+                stage: self._stage_diagnostics(
+                    decision_state,
+                    stage,
+                    candidate_counts[stage],
+                )
+                for stage in ("A", "B", "C")
+            }
+        }
+
+    def _stage_diagnostics(
+        self,
+        decision_state: Dict[str, Any],
+        stage: str,
+        candidate_count: int,
+    ) -> Dict[str, Any]:
+        stage_state = dict(decision_state.get(stage, {}) or {})
+        machines = dict(stage_state.get("machines", {}) or {})
+        incoming_key = "incoming_from_A_uids" if stage == "B" else "incoming_from_B_uids"
+        queue_size = (
+            len(stage_state.get("wait_pool_uids", []) or [])
+            + len(stage_state.get("rework_pool_uids", []) or [])
+            + (len(stage_state.get(incoming_key, []) or []) if stage != "A" else 0)
+        )
+        idle_machines = sum(
+            1
+            for machine in machines.values()
+            if str(machine.get("status", "")).upper() == "IDLE"
+        )
+        running_machines = sum(
+            1
+            for machine in machines.values()
+            if str(machine.get("status", "")).upper() == "BUSY"
+        )
+        batch_sizes = [
+            int(machine.get("batch_size", 1) or 1)
+            for machine in machines.values()
+            if isinstance(machine, dict)
+        ]
+        batch_size = max(1, min(batch_sizes) if batch_sizes else 1)
+        return {
+            "queue_size": queue_size,
+            "idle_machines": idle_machines,
+            "running_machines": running_machines,
+            "batch_size": batch_size,
+            "batch_ready": queue_size >= batch_size,
+            "candidate_count": int(candidate_count),
+        }
+
+    def _empty_reason(
+        self,
+        decision_state: Dict[str, Any],
+        candidate_actions: List[Dict[str, Any]],
+        selected_candidate_id: Optional[str],
+    ) -> Optional[str]:
+        if candidate_actions and selected_candidate_id:
+            return None
+        diagnostics = self._portfolio_diagnostics(decision_state, candidate_actions)
+        stages = diagnostics["stages"]
+        if any(stage["queue_size"] > 0 and stage["idle_machines"] == 0 for stage in stages.values()):
+            return "ALL_EQUIPMENT_BUSY"
+        if all(stage["queue_size"] == 0 for stage in stages.values()):
+            return "NO_WAIT_POOL"
+        if any(stage["queue_size"] > 0 and not stage["batch_ready"] for stage in stages.values()):
+            return "BATCH_NOT_READY"
+        return "NO_ELIGIBLE_CANDIDATES"

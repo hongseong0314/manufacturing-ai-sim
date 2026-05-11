@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from src.mes.runtime.common import STAGES
+from src.mes.runtime.candidate_portfolio import latest_candidate_portfolio
 from src.mes.runtime.decision_trace import decision_chain, latest_correlation_id
 
 
@@ -130,6 +131,7 @@ def live_fab_state(context: Any) -> Dict[str, Any]:
         "kpis": fab_kpis(context),
         "stages": stages,
         "equipment": equipment,
+        "candidate_portfolio": latest_candidate_portfolio(context),
         "active_chain": decision_chain(context, correlation_id),
         "recent_events": [event.to_dict() for event in recent_events],
         "last_cycle": context.last_cycle,

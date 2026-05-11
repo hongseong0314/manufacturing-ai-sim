@@ -148,10 +148,16 @@ Deliverables:
 - `/api/v2/harness/run-cycle` L3 budget-driven AUTO execution,
 - `/api/v2/harness/run-until` bounded execution loop,
 - decision-chain response with candidate portfolio metadata.
+- `/api/v2/candidate-portfolio/latest` selected/rejected portfolio payload,
+- `/api/v2/candidate-portfolio/{correlation_id}` correlation-specific
+  portfolio payload.
+- `/api/v2/ai-dev/policy-stack` active policy-stack payload,
+- `/api/v2/ai-dev/decision-cycles` correlation-level decision browser payload,
+- `/api/v2/ai-dev/candidate-portfolio/{correlation_id}` developer portfolio
+  payload with score breakdown and L2 detail.
 
 Future deliverables:
 
-- standalone candidate portfolio endpoint,
 - standalone annotation endpoint,
 - standalone meta-selection endpoint,
 - command finalization endpoint.
@@ -164,14 +170,22 @@ Acceptance:
 
 ## Phase 7: UI Expansion
 
-Status: implemented for Control Room Traceability V1 in `/mes`. The control
-room shows L3 budget plan, selected candidate rows, L2 annotations, L3/L4 policy
-ids, A/B/C machine detail, Gantt drilldown, autoplay, generate lot, and reset. A
-full candidate portfolio workbench is still future work.
+Status: implemented for Control Room Traceability V1 and Candidate Portfolio
+Workbench V1 in `/mes`, plus AI Developer Console V1 in `/mes#ai-dev`. The
+control room shows L3 budget plan, selected and rejected candidate rows, L2
+annotations, L3/L4 policy ids, A/B/C machine detail, Gantt drilldown, autoplay,
+generate lot, and reset.
 
 Delivered:
 
 - selected-candidate trace panels,
+- selected/rejected Candidate Portfolio workbench,
+- local score vs L3 upper score,
+- L2 annotation and command status per candidate,
+- latest actionable portfolio fallback when the newest cycle is empty,
+- empty portfolio diagnostics,
+- AI Developer Console policy stack, decision cycle browser, portfolio lab,
+  score breakdown, and L2 annotation inspector,
 - C packing group-selection traceability,
 - selected local-score and upper-score metadata where available,
 - C machine detail,
@@ -179,7 +193,7 @@ Delivered:
 
 Future deliverable:
 
-- Full selected/unselected candidate portfolio workbench.
+- Runtime experiment preset controls and comparison views.
 
 Acceptance:
 
@@ -207,15 +221,13 @@ Acceptance:
 
 Recommended next build order:
 
-1. Full Candidate Portfolio workbench that exposes selected and unselected L1
-   candidates with L2 annotations and L3 upper scores.
-2. Runtime experiment presets and config controls for balanced/A-bottleneck/
+1. Runtime experiment presets and config controls for balanced/A-bottleneck/
    B-bottleneck/stress scenarios.
-3. Duplicate same-cycle reservation locks for multi-command AUTO cycles.
-4. Explicit FeatureSnapshot persistence/indexing for every decision cycle.
-5. Lot/wafer genealogy views linking command, equipment, recipe/APC, QA result,
+2. Duplicate same-cycle reservation locks for multi-command AUTO cycles.
+3. Explicit FeatureSnapshot persistence/indexing for every decision cycle.
+4. Lot/wafer genealogy views linking command, equipment, recipe/APC, QA result,
    and event history.
-6. Recipe/APC command endpoints and operator hold/release/approval workflows.
+5. Recipe/APC command endpoints and operator hold/release/approval workflows.
 
 ## Phase 9: Operator Workflow And Production Boundaries
 

@@ -6,6 +6,12 @@
     let selectedPointId = null;
     let lastGantt = null;
     let lastLive = null;
+    let portfolioStageFilter = "ALL";
+    let portfolioSelectedOnly = false;
+    let selectedAiDevCorrelation = null;
+    let selectedAiDevCandidateId = null;
+    let lastAiDevPortfolio = null;
+    const AI_DEV_CYCLE_LIMIT = 25;
 
     const statusClass = (status) => {
       const s = String(status || "").toUpperCase();
@@ -37,11 +43,24 @@
         ? await fetch(`/api/v2/simulation/autoplay/status?step_cycles=${stepCycles}`).then(r => r.json()).then(x => x.live)
         : await fetch("/api/v2/fab/live").then(r => r.json());
       const gantt = await fetch("/api/v2/gantt").then(r => r.json());
-      render(live, gantt);
+      const aiDev = await loadAiDevSummary();
+      render(live, gantt, aiDev);
       if (selectedMachineId) await loadMachineDetail(selectedMachineId, false);
     }
 
-    function render(live, gantt) {
+    async function loadAiDevSummary() {
+      try {
+        const [policyStack, decisionCycles] = await Promise.all([
+          fetch("/api/v2/ai-dev/policy-stack").then(r => r.json()),
+          fetch(`/api/v2/ai-dev/decision-cycles?limit=${AI_DEV_CYCLE_LIMIT}`).then(r => r.json()),
+        ]);
+        return { policyStack, decisionCycles };
+      } catch (error) {
+        return { policyStack: {}, decisionCycles: { items: [] } };
+      }
+    }
+
+    function render(live, gantt, aiDev = {}) {
       lastLive = live;
       lastGantt = gantt;
       const k = live.kpis || {};
@@ -65,6 +84,8 @@
       renderStages(live.stages || {});
       renderEquipment(live.equipment || []);
       renderChain(chain);
+      renderPortfolio(live.candidate_portfolio || chain.candidate_portfolio || {});
+      renderAiDev(live, aiDev);
       renderEvents(live.recent_events || []);
       renderGantt(gantt || {}, live);
       updateNavState();
@@ -367,7 +388,10 @@
           <span>max ${escapeText(trace.selected_candidate_ids?.length || 0)} commands</span>
         </div>
         <div class="trace-card">
-          <strong>Candidate Portfolio</strong>
+          <div class="trace-card-title">
+            <strong>Candidate Portfolio</strong>
+            <button class="link-button" id="open-portfolio-workbench" type="button">Open</button>
+          </div>
           <code>${escapeText(trace.candidate_count || 0)} candidates</code>
           <div class="candidate-list">${candidateRows || "<span>No selected candidates</span>"}</div>
         </div>
@@ -376,6 +400,206 @@
           <code>${escapeText(annotations.length)} annotations</code>
           <span>selected ${escapeText(trace.selected_candidate_id || "-")}</span>
         </div>`;
+      const openPortfolio = document.getElementById("open-portfolio-workbench");
+      if (openPortfolio) {
+        openPortfolio.onclick = () => {
+          location.hash = "candidate-portfolio";
+          updateNavState();
+        };
+      }
+    }
+
+    function renderPortfolio(portfolio) {
+      const items = portfolio.items || [];
+      const filtered = items.filter(candidate => {
+        const stage = String(candidate.stage || "").toUpperCase();
+        if (portfolioStageFilter !== "ALL" && stage !== portfolioStageFilter) return false;
+        if (portfolioSelectedOnly && !candidate.selected) return false;
+        return true;
+      });
+      const summary = portfolio.summary || {};
+      document.getElementById("nav-portfolio").textContent = String(summary.count || items.length || 0);
+      document.getElementById("portfolio-count").textContent =
+        `${filtered.length}/${items.length} candidates · selected ${summary.selected_count || 0}`;
+      const stageCounts = summary.stage_counts || {};
+      document.getElementById("portfolio-stage-counts").textContent =
+        `A ${stageCounts.A || 0} / B ${stageCounts.B || 0} / C ${stageCounts.C || 0}`;
+      document.getElementById("portfolio-body").innerHTML = filtered.map(candidate => {
+        const annotation = candidate.l2_annotation || {};
+        const components = candidate.score_components || {};
+        const group = formatGroupKey(candidate.group_key || {});
+        const l2 = annotation.quality_risk || annotation.recipe_id || annotation.apc_policy || "-";
+        const reason = candidate.selected
+          ? "selected_by_l3"
+          : (candidate.rejection_reason || "not_selected");
+        const commandStatus = candidate.command_status || "-";
+        return `<tr class="${candidate.selected ? "portfolio-selected" : ""}">
+          <td><span class="${statusClass(candidate.selected ? "PASS" : (candidate.budget_selected ? "PLAN" : "REJECTED"))}">${candidate.selected ? "SELECTED" : (candidate.budget_selected ? "BUDGET" : "REJECTED")}</span></td>
+          <td>${escapeText(candidate.stage || "-")}</td>
+          <td>${escapeText(group || "-")}</td>
+          <td><code>${escapeText(candidate.equipment_id || "-")}</code></td>
+          <td><code>${escapeText(formatTaskList(candidate.task_uids || []) || "-")}</code></td>
+          <td>${escapeText(formatMetric(candidate.local_score))}</td>
+          <td><strong>${escapeText(formatMetric(candidate.upper_score))}</strong><div class="kpi-note">due ${escapeText(formatMetric(components.due_date_pressure))}</div></td>
+          <td>${escapeText(l2)}</td>
+          <td>${escapeText(reason)}</td>
+          <td><span class="${statusClass(commandStatus)}">${escapeText(commandStatus)}</span></td>
+        </tr>`;
+      }).join("") || "<tr><td colspan='10'>No candidate portfolio yet. Run a cycle to create one.</td></tr>";
+    }
+
+    function renderAiDev(live, aiDev) {
+      const policy = aiDev.policyStack || {};
+      const cycles = aiDev.decisionCycles?.items || [];
+      document.getElementById("nav-ai-dev").textContent = String(cycles.length || "-");
+      document.getElementById("ai-dev-policy-factory").textContent = policy.factory_name || "-";
+      renderAiDevPolicyStack(policy);
+      renderAiDevCycles(cycles);
+      const fallbackPortfolio = live.candidate_portfolio || live.active_chain?.candidate_portfolio || {};
+      const activePortfolio = lastAiDevPortfolio || fallbackPortfolio;
+      if (!selectedAiDevCorrelation && activePortfolio.correlation_id) {
+        selectedAiDevCorrelation = activePortfolio.correlation_id;
+      }
+      renderAiDevPortfolio(activePortfolio);
+    }
+
+    function renderAiDevPolicyStack(policy) {
+      const layers = policy.layers || {};
+      document.getElementById("ai-dev-policy-stack-body").innerHTML = ["L4", "L3", "L1", "L2"].map(layer => {
+        const item = layers[layer] || {};
+        const policyId = item.policy_id || policy[`${layer.toLowerCase()}_policy_id`] || "-";
+        const modelId = item.model_id || "-";
+        const configSummary = policyConfigSummary(policy, layer);
+        return `<div class="policy-layer">
+          <strong>${layer}</strong>
+          <div class="policy-layer-detail">
+            <code title="${escapeText(policyId)}">${escapeText(policyId)}</code>
+            <span title="${escapeText(modelId)}">model ${escapeText(modelId)} · v${escapeText(item.model_version || "-")}</span>
+            <span title="${escapeText(configSummary)}">config ${escapeText(configSummary)}</span>
+            <span>source ${escapeText(item.config_source || policy.factory_name || "-")}</span>
+          </div>
+        </div>`;
+      }).join("");
+    }
+
+    function policyConfigSummary(policy, layer) {
+      const config = policy.config || {};
+      if (layer === "L4") {
+        return `objective_policy_L4=${policy.objective_policy_L4 || config.objective_policy_L4 || "-"}`;
+      }
+      if (layer === "L3") {
+        return `meta_scheduler_L3=${policy.meta_scheduler_L3 || config.meta_scheduler_L3 || "-"}`;
+      }
+      if (layer === "L2") {
+        return `tuner_A=${policy.tuner_A || config.tuner_A || "-"} · tuner_B=${policy.tuner_B || config.tuner_B || "-"}`;
+      }
+      return [
+        `scheduler_A=${policy.scheduler_A || config.scheduler_A || "-"}`,
+        `scheduler_B=${policy.scheduler_B || config.scheduler_B || "-"}`,
+        `packing_C=${policy.packing_C || config.packing_C || "-"}`,
+      ].join(" · ");
+    }
+
+    function renderAiDevCycles(cycles) {
+      document.getElementById("ai-dev-cycle-count").textContent = `${cycles.length} latest`;
+      document.getElementById("ai-dev-cycle-body").innerHTML = cycles.map(row => {
+        const selected = row.correlation_id === selectedAiDevCorrelation;
+        return `<tr class="${selected ? "portfolio-selected" : ""}">
+          <td><button class="link-button ai-dev-cycle-link" type="button" data-corr="${escapeText(row.correlation_id)}"><code>${escapeText(row.correlation_id || "-")}</code></button></td>
+          <td>${escapeText(row.time ?? "-")}</td>
+          <td>${escapeText(row.objective_id || "-")}</td>
+          <td>${escapeText(row.selected_stage || "-")}</td>
+          <td>${escapeText(`${row.selected_count || 0}/${row.candidate_count || 0}`)}</td>
+          <td><span class="${statusClass(row.is_actionable ? "PASS" : "PENDING")}">${escapeText(row.is_actionable ? "ACTIONABLE" : (row.empty_reason || "EMPTY"))}</span></td>
+        </tr>`;
+      }).join("") || "<tr><td colspan='6'>No decision cycles yet.</td></tr>";
+      document.querySelectorAll(".ai-dev-cycle-link").forEach(button => {
+        button.onclick = async () => {
+          await loadAiDevPortfolio(button.dataset.corr);
+        };
+      });
+    }
+
+    async function loadAiDevPortfolio(correlationId) {
+      if (!correlationId) return;
+      selectedAiDevCorrelation = correlationId;
+      selectedAiDevCandidateId = null;
+      lastAiDevPortfolio = await fetch(`/api/v2/ai-dev/candidate-portfolio/${correlationId}`).then(r => r.json());
+      renderAiDevPortfolio(lastAiDevPortfolio);
+      renderAiDevCycles((await loadAiDevSummary()).decisionCycles?.items || []);
+    }
+
+    function renderAiDevPortfolio(portfolio) {
+      const items = portfolio.items || [];
+      const selected = items.find(item => item.candidate_id === selectedAiDevCandidateId)
+        || items.find(item => item.selected)
+        || items[0]
+        || null;
+      selectedAiDevCandidateId = selected?.candidate_id || null;
+      document.getElementById("ai-dev-summary").textContent =
+        `${portfolio.kind || "EMPTY"} · ${portfolio.correlation_id || "-"} · ${items.length} candidates`;
+      document.getElementById("ai-dev-portfolio-title").textContent =
+        `${portfolio.correlation_id || "-"} · ${portfolio.summary?.selected_count || 0}/${portfolio.count || 0} selected`;
+      document.getElementById("ai-dev-portfolio-body").innerHTML = items.map(candidate => {
+        const annotation = candidate.l2_annotation || {};
+        return `<tr class="${candidate.candidate_id === selectedAiDevCandidateId ? "portfolio-selected" : ""}">
+          <td><button class="link-button ai-dev-candidate-link" type="button" data-candidate-id="${escapeText(candidate.candidate_id)}">${escapeText(candidate.selected ? "SELECTED" : (candidate.budget_selected ? "BUDGET" : "REJECTED"))}</button></td>
+          <td>${escapeText(candidate.stage || "-")}</td>
+          <td>${escapeText(formatGroupKey(candidate.group_key || {}) || "-")}</td>
+          <td><code>${escapeText(candidate.equipment_id || "-")}</code></td>
+          <td><code>${escapeText(formatTaskList(candidate.task_uids || []) || "-")}</code></td>
+          <td>${escapeText(formatMetric(candidate.local_score))}</td>
+          <td><strong>${escapeText(formatMetric(candidate.upper_score))}</strong></td>
+          <td>${escapeText(annotation.quality_risk || annotation.recipe_id || "-")}</td>
+          <td>${escapeText(candidate.rejection_reason || (candidate.selected ? "selected_by_l3" : "-"))}</td>
+        </tr>`;
+      }).join("") || "<tr><td colspan='9'>No candidates in this cycle.</td></tr>";
+      document.querySelectorAll(".ai-dev-candidate-link").forEach(button => {
+        button.onclick = () => {
+          selectedAiDevCandidateId = button.dataset.candidateId;
+          renderAiDevPortfolio(portfolio);
+        };
+      });
+      renderAiDevCandidateDetail(selected, portfolio);
+      renderAiDevDiagnostics(portfolio);
+    }
+
+    function renderAiDevCandidateDetail(candidate, portfolio) {
+      const target = document.getElementById("ai-dev-candidate-detail");
+      document.getElementById("ai-dev-candidate-title").textContent = candidate?.candidate_id || "empty";
+      if (!candidate) {
+        target.innerHTML = "<span class='kpi-note'>Select a decision cycle with candidates.</span>";
+        return;
+      }
+      const components = candidate.score_components || {};
+      const annotation = candidate.l2_annotation || {};
+      const weights = portfolio.objective_weights || {};
+      target.innerHTML = `
+        <dl>
+          <dt>Local</dt><dd>${escapeText(formatMetric(components.local_candidate_score ?? candidate.local_score))}</dd>
+          <dt>Due pressure</dt><dd>${escapeText(formatMetric(components.due_date_pressure))}</dd>
+          <dt>WIP pressure</dt><dd>${escapeText(formatMetric(components.wip_pressure))}</dd>
+          <dt>Objective bonus</dt><dd>${escapeText(formatMetric(components.objective_weight_bonus))}</dd>
+          <dt>Quality penalty</dt><dd>${escapeText(formatMetric(components.quality_risk_penalty))}</dd>
+          <dt>Final upper</dt><dd>${escapeText(formatMetric(components.final_upper_score ?? candidate.upper_score))}</dd>
+          <dt>L4 weights</dt><dd>${escapeText(formatGroupKey(weights) || "-")}</dd>
+          <dt>L2 annotation</dt><dd>${escapeText(formatGroupKey(annotation) || "-")}</dd>
+        </dl>`;
+    }
+
+    function renderAiDevDiagnostics(portfolio) {
+      const diagnostics = portfolio.diagnostics?.stages || {};
+      document.getElementById("ai-dev-empty-status").textContent =
+        portfolio.is_actionable ? "actionable" : (portfolio.empty_reason || "empty");
+      document.getElementById("ai-dev-empty-diagnostics").innerHTML = `
+        <dl>
+          ${["A", "B", "C"].map(stage => {
+            const item = diagnostics[stage] || {};
+            return `<dt>${stage}</dt><dd>queue ${item.queue_size || 0} · idle ${item.idle_machines || 0} · running ${item.running_machines || 0} · batch ${item.batch_size || 1} · candidates ${item.candidate_count || 0}</dd>`;
+          }).join("")}
+          <dt>Latest empty</dt><dd><code>${escapeText(portfolio.latest_empty_correlation_id || "-")}</code></dd>
+          <dt>Last actionable</dt><dd><code>${escapeText(portfolio.last_actionable_correlation_id || "-")}</code></dd>
+        </dl>`;
     }
 
     function renderEvents(events) {
@@ -568,6 +792,13 @@
         .join(" / ");
     }
 
+    function formatGroupKey(group) {
+      return Object.entries(group || {})
+        .filter(([, value]) => value !== null && value !== undefined && value !== "")
+        .map(([key, value]) => `${key}:${value}`)
+        .join(" / ");
+    }
+
     function formatTargetWindow(window) {
       if (!Array.isArray(window) || window.length < 2) return "-";
       return `${formatMetric(window[0])} – ${formatMetric(window[1])}`;
@@ -583,6 +814,8 @@
 
     function updateNavState() {
       const hash = location.hash || "#fab";
+      document.body.classList.toggle("portfolio-page", hash === "#candidate-portfolio");
+      document.body.classList.toggle("ai-dev-page", hash === "#ai-dev");
       document.querySelectorAll(".nav-item").forEach(item => {
         item.classList.toggle("active", item.getAttribute("href") === hash);
       });
@@ -614,6 +847,14 @@
     };
     document.getElementById("machine-back").onclick = () => {
       location.hash = "equipment";
+    };
+    document.getElementById("portfolio-stage-filter").onchange = (event) => {
+      portfolioStageFilter = event.target.value || "ALL";
+      renderPortfolio(lastLive?.candidate_portfolio || lastLive?.active_chain?.candidate_portfolio || {});
+    };
+    document.getElementById("portfolio-selected-only").onchange = (event) => {
+      portfolioSelectedOnly = Boolean(event.target.checked);
+      renderPortfolio(lastLive?.candidate_portfolio || lastLive?.active_chain?.candidate_portfolio || {});
     };
     window.addEventListener("hashchange", updateNavState);
     setInterval(() => refresh(running ? Number(document.getElementById("speed").value) : 0), 1000);

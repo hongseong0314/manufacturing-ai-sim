@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from src.mes.runtime.candidate_portfolio import (
+    candidate_portfolio as build_candidate_portfolio,
+    portfolio_summary,
+)
+
 
 def latest_correlation_id(context: Any) -> Optional[str]:
     if context.last_correlation_id:
@@ -38,6 +43,7 @@ def decision_chain(context: Any, correlation_id: Optional[str]) -> Dict[str, Any
     commands = context.harness.store.commands(correlation_id)
     validation_status = validations[-1].validation_status if validations else "PENDING"
     recommendation_dicts = [item.to_dict() for item in recommendations]
+    portfolio_payload = build_candidate_portfolio(context, correlation_id)
     return {
         "correlation_id": correlation_id,
         "recommendations": recommendation_dicts,
@@ -45,6 +51,8 @@ def decision_chain(context: Any, correlation_id: Optional[str]) -> Dict[str, Any
         "validations": [item.to_dict() for item in validations],
         "commands": [item.to_dict() for item in commands],
         "traceability": chain_traceability(recommendation_dicts, commands),
+        "candidate_portfolio": portfolio_payload,
+        "portfolio_summary": portfolio_summary(context, correlation_id),
         "validation_status": validation_status,
         "counts": {
             "recommendations": len(recommendations),

@@ -18,9 +18,11 @@
       <a class="nav-item active" href="#fab"><span>Fab Control</span><span id="nav-live">Live</span></a>
       <a class="nav-item" href="#gantt"><span>Flow & Gantt</span><span id="nav-gantt">-</span></a>
       <a class="nav-item" href="#chain"><span>Decision Chain</span><span id="nav-chain">-</span></a>
+      <a class="nav-item" href="#candidate-portfolio"><span>Candidate Portfolio</span><span id="nav-portfolio">-</span></a>
       <a class="nav-item" href="#equipment"><span>Equipment</span><span id="nav-eqp">-</span></a>
       <a class="nav-item" href="#machine"><span>Machine Detail</span><span id="nav-machine">-</span></a>
       <div class="nav-label">Trace</div>
+      <a class="nav-item" href="#ai-dev"><span>AI Dev Console</span><span id="nav-ai-dev">-</span></a>
       <a class="nav-item" href="#events"><span>Events</span><span id="nav-events">-</span></a>
     </aside>
     <main class="workspace" id="fab">
@@ -98,6 +100,82 @@
             <div class="panel-header"><h2>Decision Chain</h2><span id="chain-count">0 records</span></div>
             <div class="trace-grid" id="chain-trace"></div>
             <div class="chain" id="chain-list"></div>
+          </div>
+        </section>
+        <section class="panel" id="candidate-portfolio">
+          <div class="panel-header">
+            <h2>Candidate Portfolio</h2>
+            <div class="portfolio-controls">
+              <span id="portfolio-count">0 candidates</span>
+              <span id="portfolio-stage-counts">A 0 / B 0 / C 0</span>
+              <select id="portfolio-stage-filter" class="button compact">
+                <option value="ALL">All</option>
+                <option value="A">A</option>
+                <option value="B">B</option>
+                <option value="C">C</option>
+              </select>
+              <label class="toggle-control">
+                <input id="portfolio-selected-only" type="checkbox" />
+                <span>Selected only</span>
+              </label>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="portfolio-table">
+              <thead>
+                <tr>
+                  <th>Pick</th>
+                  <th>Stage</th>
+                  <th>Group</th>
+                  <th>Equipment</th>
+                  <th>Tasks</th>
+                  <th>Local</th>
+                  <th>Upper</th>
+                  <th>L2</th>
+                  <th>Reason</th>
+                  <th>Command</th>
+                </tr>
+              </thead>
+              <tbody id="portfolio-body"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel ai-dev-console" id="ai-dev-console">
+          <div class="panel-header">
+            <h2>AI Developer Console</h2>
+            <span id="ai-dev-summary">policy stack · decision cycles · portfolio lab</span>
+          </div>
+          <div class="ai-dev-grid">
+            <div class="panel-lite" id="ai-dev-policy-stack">
+              <div class="panel-header compact-header"><h2>Policy Stack</h2><span id="ai-dev-policy-factory">-</span></div>
+              <div class="policy-stack-grid" id="ai-dev-policy-stack-body"></div>
+            </div>
+            <div class="panel-lite">
+              <div class="panel-header compact-header"><h2>Decision Cycles</h2><span id="ai-dev-cycle-count">0 cycles</span></div>
+              <div class="table-wrap cycle-table-wrap">
+                <table class="dev-cycle-table">
+                  <thead><tr><th>Correlation</th><th>t</th><th>Obj</th><th>Stage</th><th>Candidates</th><th>Status</th></tr></thead>
+                  <tbody id="ai-dev-cycle-body"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="panel-lite ai-dev-wide">
+              <div class="panel-header compact-header"><h2>Candidate Portfolio Lab</h2><span id="ai-dev-portfolio-title">-</span></div>
+              <div class="table-wrap">
+                <table class="portfolio-table">
+                  <thead><tr><th>Pick</th><th>Stage</th><th>Group</th><th>Equipment</th><th>Tasks</th><th>Local</th><th>Upper</th><th>L2</th><th>Reason</th></tr></thead>
+                  <tbody id="ai-dev-portfolio-body"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="panel-lite">
+              <div class="panel-header compact-header"><h2>Score Breakdown</h2><span id="ai-dev-candidate-title">selected</span></div>
+              <div class="point-detail" id="ai-dev-candidate-detail"></div>
+            </div>
+            <div class="panel-lite">
+              <div class="panel-header compact-header"><h2>Empty Diagnostics</h2><span id="ai-dev-empty-status">-</span></div>
+              <div class="point-detail" id="ai-dev-empty-diagnostics"></div>
+            </div>
           </div>
         </section>
         <section class="split-grid" id="equipment">

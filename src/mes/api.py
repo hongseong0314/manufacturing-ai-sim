@@ -9,8 +9,17 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from src.mes.domain import AIRecommendation
+from src.mes.runtime.ai_dev import (
+    ai_dev_candidate_portfolio,
+    decision_cycles_payload,
+    policy_stack_payload,
+)
 from src.mes.runtime.common import normalize_target_stage
 from src.mes.runtime.context import MESAPIContext
+from src.mes.runtime.candidate_portfolio import (
+    candidate_portfolio as build_candidate_portfolio,
+    latest_candidate_portfolio,
+)
 from src.mes.runtime.decision_trace import decision_chain as build_decision_chain
 from src.mes.runtime.equipment_detail import equipment_detail as build_equipment_detail
 from src.mes.runtime.gantt import gantt_state
@@ -216,6 +225,31 @@ def run_until(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str,
 @app.get("/api/v2/decision-chain/{correlation_id}")
 def decision_chain(correlation_id: str) -> Dict[str, Any]:
     return build_decision_chain(context, correlation_id)
+
+
+@app.get("/api/v2/candidate-portfolio/latest")
+def candidate_portfolio_latest() -> Dict[str, Any]:
+    return latest_candidate_portfolio(context)
+
+
+@app.get("/api/v2/candidate-portfolio/{correlation_id}")
+def candidate_portfolio(correlation_id: str) -> Dict[str, Any]:
+    return build_candidate_portfolio(context, correlation_id)
+
+
+@app.get("/api/v2/ai-dev/policy-stack")
+def ai_dev_policy_stack() -> Dict[str, Any]:
+    return policy_stack_payload(context)
+
+
+@app.get("/api/v2/ai-dev/decision-cycles")
+def ai_dev_decision_cycles(limit: int = Query(50, ge=1, le=200)) -> Dict[str, Any]:
+    return decision_cycles_payload(context, limit=limit)
+
+
+@app.get("/api/v2/ai-dev/candidate-portfolio/{correlation_id}")
+def ai_dev_portfolio(correlation_id: str) -> Dict[str, Any]:
+    return ai_dev_candidate_portfolio(context, correlation_id)
 
 
 @app.get("/api/v2/equipment/{equipment_id}/detail")

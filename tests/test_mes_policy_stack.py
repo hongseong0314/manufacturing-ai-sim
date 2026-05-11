@@ -175,6 +175,41 @@ def test_l3_c_packing_candidates_include_l2_annotations_before_selection():
     assert l2.recommended_action["candidate_id"] == l1.recommended_action["candidate_id"]
 
 
+def test_planner_records_candidate_portfolio_snapshot_with_selected_and_rejected_rows():
+    env = _build_c_group_env()
+    harness = MESDevelopmentHarness(config={**env.config, "mes_l1_C": "grouped"})
+
+    plan = harness.planner.plan(env.get_decision_state(), target_stage="C")
+    snapshot = next(
+        item for item in plan.feature_snapshots if item.layer_id == "PORTFOLIO"
+    )
+    rows = snapshot.features["candidates"]
+
+    assert snapshot.correlation_id == plan.correlation_id
+    assert len(rows) >= 2
+    selected_rows = [row for row in rows if row["selected"]]
+    rejected_rows = [row for row in rows if not row["selected"]]
+    assert selected_rows
+    assert rejected_rows
+    assert {
+        "correlation_id",
+        "candidate_id",
+        "stage",
+        "candidate_type",
+        "group_key",
+        "equipment_id",
+        "task_uids",
+        "local_score",
+        "local_rank",
+        "l2_annotation",
+        "upper_score",
+        "score_components",
+        "selected",
+        "rejection_reason",
+        "linked_recommendation_ids",
+    } <= set(rows[0])
+
+
 def test_l3_allocates_multi_stage_budgets_from_single_portfolio_pass():
     env = _build_multi_stage_budget_env()
     harness = MESDevelopmentHarness(config=env.config)

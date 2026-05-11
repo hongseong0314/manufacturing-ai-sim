@@ -123,6 +123,11 @@ def _record_step_for_results(
             )
 
 
+def _record_budget_plan_snapshots(context: Any, budget_plan: Any) -> None:
+    for snapshot in getattr(budget_plan, "feature_snapshots", []):
+        context.harness.store.add_feature_snapshot(snapshot)
+
+
 def run_auto_cycle(context: Any) -> Dict[str, Any]:
     generated_tasks = maybe_generate_periodic_tasks(context)
     state = context.env.get_decision_state()
@@ -189,6 +194,7 @@ def run_auto_cycle(context: Any) -> Dict[str, Any]:
 
     if results:
         context.last_correlation_id = results[-1].generated.plan.correlation_id
+    _record_budget_plan_snapshots(context, budget_plan)
 
     payload = {
         "mode": "AUTO",

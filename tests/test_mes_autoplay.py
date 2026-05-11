@@ -55,6 +55,47 @@ def test_auto_cycle_uses_l3_budget_plan_for_parallel_dispatch():
     assert payload['count'] == len(selected_ids)
 
 
+def test_auto_cycle_exposes_full_budget_candidate_portfolio_as_latest():
+    client.post('/api/v2/simulation/reset')
+    run = client.post('/api/v2/harness/run-cycle', json={'target_stage': 'AUTO'})
+    assert run.status_code == 200
+
+    payload = run.json()
+    portfolio = client.get('/api/v2/candidate-portfolio/latest').json()
+
+    assert portfolio['correlation_id'] == payload['budget_correlation_id']
+    assert portfolio['count'] >= payload['count']
+    assert portfolio['summary']['stage_counts']['A'] >= payload['count']
+    assert portfolio['summary']['rejected_count'] > 0
+
+
+def test_latest_candidate_portfolio_prefers_last_actionable_over_empty_cycle():
+    client.post('/api/v2/simulation/reset')
+    first = client.post('/api/v2/harness/run-cycle', json={'target_stage': 'AUTO'}).json()
+    second = client.post('/api/v2/harness/run-cycle', json={'target_stage': 'AUTO'}).json()
+
+    latest = client.get('/api/v2/candidate-portfolio/latest').json()
+    empty = client.get(
+        f"/api/v2/candidate-portfolio/{second['budget_correlation_id']}"
+    ).json()
+
+    assert latest['kind'] == 'ACTIONABLE'
+    assert latest['is_actionable'] is True
+    assert latest['correlation_id'] == first['budget_correlation_id']
+    assert latest['last_actionable_correlation_id'] == first['budget_correlation_id']
+    assert latest['latest_empty_correlation_id'] == second['budget_correlation_id']
+    assert empty['kind'] == 'EMPTY'
+    assert empty['is_actionable'] is False
+    assert empty['empty_reason'] in {
+        'ALL_EQUIPMENT_BUSY',
+        'NO_ELIGIBLE_CANDIDATES',
+        'NO_WAIT_POOL',
+        'BATCH_NOT_READY',
+        'RULE_INELIGIBLE',
+    }
+    assert empty['diagnostics']['stages']['A']['idle_machines'] == 0
+
+
 def test_mes_screen_serves_live_control_room():
     r = client.get('/mes')
     assert r.status_code == 200

@@ -47,7 +47,14 @@ def test_harness_persists_decision_chain_audit_records():
     correlation_id = result.generated.plan.correlation_id
 
     assert result.command is not None
-    assert len(harness.store.feature_snapshots(correlation_id)) == 4
+    snapshots = harness.store.feature_snapshots(correlation_id)
+    assert {snapshot.layer_id for snapshot in snapshots} == {
+        "L4",
+        "L3",
+        "PORTFOLIO",
+        "L1",
+        "L2",
+    }
     assert len(harness.store.recommendations(correlation_id)) == 4
     assert len(harness.store.validations(correlation_id)) == 1
     assert (

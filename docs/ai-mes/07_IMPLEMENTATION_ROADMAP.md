@@ -171,10 +171,11 @@ Acceptance:
 ## Phase 7: UI Expansion
 
 Status: implemented for Control Room Traceability V1, Candidate Portfolio
-Workbench V1, AI Developer Console V1, and Policy Experiment Runner V1. The
-control room shows L3 budget plan, selected and rejected candidate rows, L2
-annotations, L3/L4 policy ids, A/B/C machine detail, Gantt drilldown, autoplay,
-generate lot, reset, and offline policy experiment comparison.
+Workbench V1, AI Developer Console V1, Policy Experiment Runner V1, and
+Assignment Trace Inspector V1. The control room shows L3 budget plan, selected
+and rejected candidate rows, L2 annotations, L3/L4 policy ids, A/B/C machine
+detail, Gantt drilldown, autoplay, generate lot, reset, offline policy
+experiment comparison, and assignment-level chain inspection.
 
 Delivered:
 
@@ -188,6 +189,8 @@ Delivered:
   score breakdown, and L2 annotation inspector,
 - Policy Experiment Runner scenario capture, policy variant registry, offline
   replay, result comparison, and decision diff inspector,
+- Assignment Trace Inspector search and Gantt click-through from equipment/task
+  assignment to L4 -> L3 -> L1 -> L2 -> Rule -> Command -> simulator action,
 - C packing group-selection traceability,
 - selected local-score and upper-score metadata where available,
 - C machine detail,
@@ -228,10 +231,11 @@ Recommended next build order:
    B-bottleneck/stress experiments.
 2. Duplicate same-cycle reservation locks for multi-command AUTO cycles.
 3. Learning-policy adapter contract for L1/L2/L3/L4 experiment variants.
-4. Explicit FeatureSnapshot persistence/indexing for every decision cycle.
-5. Lot/wafer genealogy views linking command, equipment, recipe/APC, QA result,
+4. Persisted assignment trace/genealogy indexes beyond command JSON matching.
+5. Explicit FeatureSnapshot persistence/indexing for every decision cycle.
+6. Lot/wafer genealogy views linking command, equipment, recipe/APC, QA result,
    and event history.
-6. Recipe/APC command endpoints and operator hold/release/approval workflows.
+7. Recipe/APC command endpoints and operator hold/release/approval workflows.
 
 ## Phase 9: Operator Workflow And Production Boundaries
 

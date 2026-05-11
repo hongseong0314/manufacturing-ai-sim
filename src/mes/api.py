@@ -14,6 +14,7 @@ from src.mes.runtime.ai_dev import (
     decision_cycles_payload,
     policy_stack_payload,
 )
+from src.mes.runtime.assignment_trace import assignment_trace as build_assignment_trace
 from src.mes.runtime.common import normalize_target_stage
 from src.mes.runtime.context import MESAPIContext
 from src.mes.runtime.candidate_portfolio import (
@@ -294,6 +295,22 @@ def ai_dev_experiment(experiment_id: str) -> Dict[str, Any]:
         return get_experiment(context, experiment_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/v2/assignment-trace")
+def assignment_trace(
+    equipment_id: Optional[str] = Query(None),
+    task_uid: Optional[int] = Query(None),
+    correlation_id: Optional[str] = Query(None),
+    candidate_id: Optional[str] = Query(None),
+) -> Dict[str, Any]:
+    return build_assignment_trace(
+        context,
+        equipment_id=equipment_id,
+        task_uid=task_uid,
+        correlation_id=correlation_id,
+        candidate_id=candidate_id,
+    )
 
 
 @app.get("/api/v2/equipment/{equipment_id}/detail")

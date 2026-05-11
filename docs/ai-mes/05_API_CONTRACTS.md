@@ -459,6 +459,82 @@ GET /api/v2/ai-dev/experiments/{experiment_id}
 Returns the stored in-memory experiment payload. V1 experiment storage is reset
 with the runtime and is not part of SQLite genealogy.
 
+## Assignment Trace API
+
+Assignment Trace Inspector V1 resolves a concrete equipment/task assignment back
+to the full layered decision chain.
+
+```http
+GET /api/v2/assignment-trace
+```
+
+Query options:
+
+```text
+equipment_id=A_0
+task_uid=0
+correlation_id=CORR_...
+candidate_id=CAND_...
+```
+
+Lookup precedence:
+
+- if `correlation_id` is supplied, search commands in that decision chain,
+- if `candidate_id` is supplied, match the selected candidate command,
+- if `equipment_id + task_uid` are supplied, match the command that assigned
+  that task to that equipment,
+- if no command matches, return `200` with `found=false`.
+
+Response shape:
+
+```python
+{
+    "found": True,
+    "lookup": {
+        "equipment_id": "A_0",
+        "task_uid": 0,
+        "correlation_id": None,
+        "candidate_id": None
+    },
+    "assignment": {
+        "stage": "A",
+        "equipment_id": "A_0",
+        "task_uids": [0, 1, 2],
+        "task_type": "new",
+        "candidate_id": "CAND_A_...",
+        "correlation_id": "CORR_...",
+        "command_id": "CMD_...",
+        "start": 0,
+        "end": 20
+    },
+    "decision_state": {},
+    "state_summary": {},
+    "task_snapshots": [],
+    "machine_snapshot": {},
+    "layers": {
+        "L4": {},
+        "L3": {},
+        "L1": {},
+        "L2": {},
+        "RULE_ENGINE": {},
+        "COMMAND": {}
+    },
+    "candidate_portfolio": {},
+    "simulator_action": {},
+    "raw": {}
+}
+```
+
+No-match response:
+
+```python
+{
+    "found": False,
+    "reason": "NO_MATCHING_COMMAND",
+    "lookup": {...}
+}
+```
+
 ## API Evolution Rules
 
 - Keep `/api/v1/*` stable for current UI.

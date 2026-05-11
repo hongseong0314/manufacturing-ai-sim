@@ -319,6 +319,22 @@ def test_control_room_html_contains_ai_dev_console_mount():
     assert 'experiment-result-body' in html
 
 
+def test_control_room_html_contains_assignment_trace_page_mount():
+    html = client.get('/mes').text
+
+    assert 'href="#assignment-trace"' in html
+    assert 'id="nav-assignment-trace"' in html
+    assert 'id="assignment-trace-page"' in html
+    assert 'id="trace-equipment-id"' in html
+    assert 'id="trace-task-uid"' in html
+    assert 'id="trace-correlation-id"' in html
+    assert 'id="trace-candidate-id"' in html
+    assert 'id="trace-find"' in html
+    assert 'id="trace-layer-timeline"' in html
+    assert 'id="trace-portfolio-body"' in html
+    assert 'id="trace-raw-payload"' in html
+
+
 def test_v2_run_until_stops_with_max_cycles_or_conditions():
     r = client.post('/api/v2/harness/run-until', json={'target_stage': 'A', 'max_cycles': 2})
     assert r.status_code == 200

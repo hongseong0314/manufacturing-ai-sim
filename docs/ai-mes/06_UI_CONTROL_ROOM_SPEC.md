@@ -221,6 +221,10 @@ Current implementation:
   AI developers select policy variants, replays each variant offline, and shows
   selected stage/candidate, local score, upper score, L2 risk, command validity,
   expected KPI delta, and a compact decision diff.
+- `/mes#assignment-trace` shows Assignment Trace Inspector V1. Gantt bars open
+  this page with equipment/task/correlation context, and the page shows the
+  assignment summary, decision-time state, L4/L3/L1/L2/Rule/Command timeline,
+  selected/rejected candidate portfolio rows, simulator action, and raw payload.
 - Candidate Portfolio defaults to the latest actionable portfolio. If the most
   recent cycle is empty, the UI keeps the last actionable portfolio visible and
   exposes the empty reason/diagnostics in the developer console.
@@ -268,6 +272,7 @@ Avoid vague phrases:
 | KPI strip | `/api/v1/kpis/fab` | same plus AI KPI |
 | Stage board | `/api/v1/wip`, `/api/v1/equipment` | same |
 | Candidate table | `/api/v2/candidate-portfolio/latest`, `/api/v2/candidate-portfolio/{correlation_id}` | same plus richer drilldown |
+| Assignment trace | `/api/v2/assignment-trace`, `/api/v2/gantt` trace keys | same plus persisted genealogy linkage |
 | AI developer console | `/api/v2/ai-dev/policy-stack`, `/api/v2/ai-dev/decision-cycles`, `/api/v2/ai-dev/candidate-portfolio/{correlation_id}`, `/api/v2/ai-dev/scenarios`, `/api/v2/ai-dev/policy-variants`, `/api/v2/ai-dev/experiments/*` | same plus scenario preset library |
 | Decision chain | `/api/v2/decision-chain/{correlation_id}` | same with portfolio metadata |
 | Rule gate | `/api/v1/rules/validate` | same plus layer consistency reasons |

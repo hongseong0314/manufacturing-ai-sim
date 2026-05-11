@@ -206,6 +206,9 @@
     body.portfolio-page .layout > section:not(#candidate-portfolio) { display: none; }
     body.portfolio-page #candidate-portfolio { min-height: calc(100vh - 116px); }
     body.portfolio-page .portfolio-table { min-width: 1280px; }
+    .assignment-trace-page { display: none; }
+    body.assignment-trace-page-active .layout > section:not(#assignment-trace-page) { display: none; }
+    body.assignment-trace-page-active #assignment-trace-page { display: block; min-height: calc(100vh - 116px); }
     .ai-dev-console { display: none; }
     body.ai-dev-page .layout > section:not(#ai-dev-console) { display: none; }
     body.ai-dev-page #ai-dev-console { display: block; min-height: calc(100vh - 116px); }
@@ -287,6 +290,69 @@
       overflow-wrap: anywhere;
     }
     .experiment-table { min-width: 1180px; }
+    .trace-search-grid {
+      align-items: end;
+      border-bottom: 1px solid var(--border);
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+      padding: 12px;
+    }
+    .trace-search-grid label {
+      color: var(--muted);
+      display: grid;
+      font-size: 11px;
+      font-weight: 650;
+      gap: 5px;
+      text-transform: uppercase;
+    }
+    .trace-search-grid input {
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--ink);
+      min-height: 34px;
+      padding: 7px 8px;
+      text-transform: none;
+    }
+    .trace-inspector-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      padding: 12px;
+    }
+    .trace-layer-list {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+    }
+    .trace-layer-card {
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--purple);
+      border-radius: 4px;
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+      padding: 8px;
+    }
+    .trace-layer-card strong { font-size: 12px; text-transform: uppercase; }
+    .trace-layer-card code,
+    .trace-layer-card span {
+      color: var(--muted);
+      font-size: 11px;
+      overflow-wrap: anywhere;
+      white-space: normal;
+    }
+    .raw-json {
+      background: #161616;
+      color: #f4f4f4;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      margin: 0;
+      max-height: 420px;
+      overflow: auto;
+      padding: 12px;
+      white-space: pre-wrap;
+    }
     .event-row { border-bottom: 1px solid var(--border); display: grid; gap: 10px; grid-template-columns: 96px 1fr auto; padding: 10px 0; }
     .event-row:last-child { border-bottom: 0; }
     .event-row b { display: block; font-size: 13px; }

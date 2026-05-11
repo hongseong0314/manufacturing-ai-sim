@@ -22,6 +22,7 @@
       <a class="nav-item" href="#equipment"><span>Equipment</span><span id="nav-eqp">-</span></a>
       <a class="nav-item" href="#machine"><span>Machine Detail</span><span id="nav-machine">-</span></a>
       <div class="nav-label">Trace</div>
+      <a class="nav-item" href="#assignment-trace"><span>Assignment Trace</span><span id="nav-assignment-trace">-</span></a>
       <a class="nav-item" href="#ai-dev"><span>AI Dev Console</span><span id="nav-ai-dev">-</span></a>
       <a class="nav-item" href="#events"><span>Events</span><span id="nav-events">-</span></a>
     </aside>
@@ -206,6 +207,46 @@
                 </table>
               </div>
               <div class="point-detail" id="experiment-comparison-inspector"></div>
+            </div>
+          </div>
+        </section>
+        <section class="panel assignment-trace-page" id="assignment-trace-page">
+          <div class="panel-header">
+            <h2>Assignment Trace Inspector</h2>
+            <span id="trace-status">Search by assignment, correlation, or candidate</span>
+          </div>
+          <div class="trace-search-grid">
+            <label>Equipment ID<input id="trace-equipment-id" placeholder="A_0" /></label>
+            <label>Task UID<input id="trace-task-uid" placeholder="0" inputmode="numeric" /></label>
+            <label>Correlation ID<input id="trace-correlation-id" placeholder="CORR_..." /></label>
+            <label>Candidate ID<input id="trace-candidate-id" placeholder="CAND_..." /></label>
+            <button class="button primary" id="trace-find" type="button">Find Trace</button>
+          </div>
+          <div class="trace-inspector-grid">
+            <div class="panel-lite">
+              <div class="panel-header compact-header"><h2>Assignment Summary</h2><span id="trace-assignment-title">-</span></div>
+              <div class="point-detail" id="trace-assignment-summary"></div>
+            </div>
+            <div class="panel-lite">
+              <div class="panel-header compact-header"><h2>State At Decision Time</h2><span id="trace-state-title">-</span></div>
+              <div class="point-detail" id="trace-state-summary"></div>
+            </div>
+            <div class="panel-lite ai-dev-wide">
+              <div class="panel-header compact-header"><h2>Layer Timeline</h2><span>L4 → L3 → L1 → L2 → Rule → Command</span></div>
+              <div class="trace-layer-list" id="trace-layer-timeline"></div>
+            </div>
+            <div class="panel-lite ai-dev-wide">
+              <div class="panel-header compact-header"><h2>Candidate Portfolio At Cycle</h2><span id="trace-portfolio-title">-</span></div>
+              <div class="table-wrap">
+                <table class="portfolio-table">
+                  <thead><tr><th>Pick</th><th>Stage</th><th>Group</th><th>Equipment</th><th>Tasks</th><th>Local</th><th>Upper</th><th>L2</th><th>Reason</th></tr></thead>
+                  <tbody id="trace-portfolio-body"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="panel-lite ai-dev-wide">
+              <div class="panel-header compact-header"><h2>Raw Payload Inspector</h2><span>debug JSON</span></div>
+              <pre class="raw-json" id="trace-raw-payload">{}</pre>
             </div>
           </div>
         </section>

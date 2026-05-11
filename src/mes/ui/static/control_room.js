@@ -14,6 +14,7 @@
     let selectedExperimentScenarioId = null;
     let selectedExperimentVariantIds = new Set(["baseline_fifo_rule", "c_grouped_packing"]);
     let lastExperiment = null;
+    let lastAssignmentTrace = null;
     const AI_DEV_CYCLE_LIMIT = 25;
 
     const statusClass = (status) => {
@@ -615,6 +616,101 @@
         </dl>`;
     }
 
+    async function loadAssignmentTrace(params = {}) {
+      const query = new URLSearchParams();
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== null && value !== undefined && String(value) !== "") {
+          query.set(key, value);
+        }
+      });
+      const suffix = query.toString() ? `?${query.toString()}` : "";
+      lastAssignmentTrace = await fetch(`/api/v2/assignment-trace${suffix}`).then(r => r.json());
+      renderAssignmentTrace(lastAssignmentTrace);
+      return lastAssignmentTrace;
+    }
+
+    function renderAssignmentTrace(trace) {
+      const found = Boolean(trace?.found);
+      document.getElementById("nav-assignment-trace").textContent = found ? "active" : "-";
+      document.getElementById("trace-status").textContent = found
+        ? `${trace.assignment?.equipment_id || "-"} · ${formatTaskList(trace.assignment?.task_uids || [])}`
+        : (trace?.reason || "No trace loaded");
+      renderTraceAssignment(trace || {});
+      renderTraceState(trace || {});
+      renderTraceLayers(trace || {});
+      renderTracePortfolio(trace?.candidate_portfolio || {});
+      document.getElementById("trace-raw-payload").textContent = JSON.stringify(trace || {}, null, 2);
+    }
+
+    function renderTraceAssignment(trace) {
+      const assignment = trace.assignment || {};
+      document.getElementById("trace-assignment-title").textContent =
+        assignment.correlation_id || "-";
+      document.getElementById("trace-assignment-summary").innerHTML = trace.found ? `
+        <dl>
+          <dt>Equipment</dt><dd><code>${escapeText(assignment.equipment_id || "-")}</code></dd>
+          <dt>Tasks</dt><dd><code>${escapeText(formatTaskList(assignment.task_uids || []) || "-")}</code></dd>
+          <dt>Window</dt><dd>t=${escapeText(assignment.start ?? "-")}→${escapeText(assignment.end ?? "-")}</dd>
+          <dt>Candidate</dt><dd><code>${escapeText(assignment.candidate_id || "-")}</code></dd>
+          <dt>Command</dt><dd><code>${escapeText(assignment.command_id || "-")}</code></dd>
+          <dt>Simulator action</dt><dd>${escapeText(formatGroupKey(trace.simulator_action || {}) || "-")}</dd>
+        </dl>` : `<span class="kpi-note">${escapeText(trace.reason || "Search for an assignment trace.")}</span>`;
+    }
+
+    function renderTraceState(trace) {
+      const summary = trace.state_summary || {};
+      const machine = trace.machine_snapshot || {};
+      const tasks = trace.task_snapshots || [];
+      document.getElementById("trace-state-title").textContent = `t=${summary.time ?? "-"}`;
+      document.getElementById("trace-state-summary").innerHTML = trace.found ? `
+        <dl>
+          <dt>A/B/C queues</dt><dd>${["A", "B", "C"].map(stage => {
+            const item = summary.stages?.[stage] || {};
+            return `${stage} wait ${item.wait || 0} · in ${item.incoming || 0} · rework ${item.rework || 0}`;
+          }).join("<br>")}</dd>
+          <dt>Machine</dt><dd><code>${escapeText(machine.equipment_id || "-")}</code> · ${escapeText(machine.status || "-")} · batch ${escapeText(machine.batch_size || "-")}</dd>
+          <dt>Task rows</dt><dd>${tasks.map(task => `T${escapeText(task.uid)} due ${escapeText(task.due_date ?? "-")} · ${escapeText(task.customer_id || "-")} · ${escapeText(task.material_type || "-")} / ${escapeText(task.color || "-")}`).join("<br>") || "-"}</dd>
+        </dl>` : "<span class='kpi-note'>No decision state loaded.</span>";
+    }
+
+    function renderTraceLayers(trace) {
+      const layers = trace.layers || {};
+      const order = ["L4", "L3", "L1", "L2", "RULE_ENGINE", "COMMAND"];
+      document.getElementById("trace-layer-timeline").innerHTML = order.map(layer => {
+        const item = layers[layer] || {};
+        const action = item.recommended_action || item.validated_command || {};
+        const label = item.recommendation_type || item.validation_status || item.command_type || "-";
+        const status = item.rule_validation_status || item.validation_status || item.status || "";
+        return `<div class="trace-layer-card">
+          <strong>${escapeText(layer)} · ${escapeText(label)}</strong>
+          <code>${escapeText(item.recommendation_id || item.command_id || item.correlation_id || "-")}</code>
+          <span>policy ${escapeText(item.policy_id || "-")} · model ${escapeText(item.model_id || "-")}</span>
+          <span>status ${escapeText(status || "-")}</span>
+          <span>action ${escapeText(formatGroupKey(action) || "-")}</span>
+        </div>`;
+      }).join("");
+    }
+
+    function renderTracePortfolio(portfolio) {
+      const items = portfolio.items || [];
+      document.getElementById("trace-portfolio-title").textContent =
+        `${portfolio.correlation_id || "-"} · ${portfolio.summary?.selected_count || 0}/${portfolio.count || 0} selected`;
+      document.getElementById("trace-portfolio-body").innerHTML = items.map(candidate => {
+        const annotation = candidate.l2_annotation || {};
+        return `<tr class="${candidate.selected ? "portfolio-selected" : ""}">
+          <td>${escapeText(candidate.selected ? "SELECTED" : (candidate.budget_selected ? "BUDGET" : "REJECTED"))}</td>
+          <td>${escapeText(candidate.stage || "-")}</td>
+          <td>${escapeText(formatGroupKey(candidate.group_key || {}) || "-")}</td>
+          <td><code>${escapeText(candidate.equipment_id || "-")}</code></td>
+          <td><code>${escapeText(formatTaskList(candidate.task_uids || []) || "-")}</code></td>
+          <td>${escapeText(formatMetric(candidate.local_score))}</td>
+          <td><strong>${escapeText(formatMetric(candidate.upper_score))}</strong></td>
+          <td>${escapeText(annotation.quality_risk || annotation.recipe_id || "-")}</td>
+          <td>${escapeText(candidate.rejection_reason || (candidate.selected ? "selected_by_l3" : "-"))}</td>
+        </tr>`;
+      }).join("") || "<tr><td colspan='9'>No portfolio rows for this trace.</td></tr>";
+    }
+
     function renderExperimentRunner(aiDev) {
       const variants = aiDev.policyVariants?.items || [];
       const scenarios = aiDev.scenarios?.items || [];
@@ -799,13 +895,31 @@
       const top = stackSize > 1 ? 6 + stackIndex * (height + gap) : 10;
       const batchLabel = bar.batch_id !== null && bar.batch_id !== undefined ? ` batch=${bar.batch_id}` : "";
       const title = `${bar.machine_id} t=${bar.start}→${bar.end}${batchLabel} tasks=${batchUids}`;
-      return `<span class="gantt-bar ${cls} selectable-gantt-bar" data-machine-id="${escapeText(bar.machine_id)}" data-stage="${escapeText(bar.stage)}" data-task-uids="${escapeText((bar.task_uids || []).join(","))}" data-batch-uids="${escapeText((bar.batch_task_uids || bar.task_uids || []).join(","))}" style="left:${left}%;width:${width}%;top:${top}px;height:${height}px;" title="${escapeText(title)}">${escapeText(bar.label || uids || bar.status)}</span>`;
+      return `<span class="gantt-bar ${cls} selectable-gantt-bar" data-machine-id="${escapeText(bar.machine_id)}" data-stage="${escapeText(bar.stage)}" data-task-uids="${escapeText((bar.task_uids || []).join(","))}" data-batch-uids="${escapeText((bar.batch_task_uids || bar.task_uids || []).join(","))}" data-correlation-id="${escapeText(bar.correlation_id || "")}" data-command-id="${escapeText(bar.command_id || "")}" data-candidate-id="${escapeText(bar.candidate_id || "")}" style="left:${left}%;width:${width}%;top:${top}px;height:${height}px;" title="${escapeText(title)}">${escapeText(bar.label || uids || bar.status)}</span>`;
     }
 
     function attachGanttBarHandlers(target) {
       target.querySelectorAll(".selectable-gantt-bar[data-machine-id]").forEach(bar => {
-        bar.onclick = () => openMachineDetail(bar.dataset.machineId);
+        bar.onclick = () => openAssignmentTraceFromBar(bar);
       });
+    }
+
+    async function openAssignmentTraceFromBar(bar) {
+      const taskUid = String(bar.dataset.taskUids || bar.dataset.batchUids || "")
+        .split(",")
+        .filter(Boolean)[0] || "";
+      const params = {
+        equipment_id: bar.dataset.machineId || "",
+        task_uid: taskUid,
+        correlation_id: bar.dataset.correlationId || "",
+        candidate_id: bar.dataset.candidateId || "",
+      };
+      document.getElementById("trace-equipment-id").value = params.equipment_id;
+      document.getElementById("trace-task-uid").value = params.task_uid;
+      document.getElementById("trace-correlation-id").value = params.correlation_id;
+      document.getElementById("trace-candidate-id").value = params.candidate_id;
+      location.hash = "assignment-trace";
+      await loadAssignmentTrace(params);
     }
 
     function barVisualClass(bar) {
@@ -903,6 +1017,7 @@
       const hash = location.hash || "#fab";
       document.body.classList.toggle("portfolio-page", hash === "#candidate-portfolio");
       document.body.classList.toggle("ai-dev-page", hash === "#ai-dev");
+      document.body.classList.toggle("assignment-trace-page-active", hash === "#assignment-trace");
       document.querySelectorAll(".nav-item").forEach(item => {
         item.classList.toggle("active", item.getAttribute("href") === hash);
       });
@@ -962,6 +1077,16 @@
         variant_ids: variantIds.length ? variantIds : ["baseline_fifo_rule"],
       });
       renderExperimentResults(lastExperiment);
+    };
+    document.getElementById("trace-find").onclick = async () => {
+      const params = {
+        equipment_id: document.getElementById("trace-equipment-id").value.trim(),
+        task_uid: document.getElementById("trace-task-uid").value.trim(),
+        correlation_id: document.getElementById("trace-correlation-id").value.trim(),
+        candidate_id: document.getElementById("trace-candidate-id").value.trim(),
+      };
+      location.hash = "assignment-trace";
+      await loadAssignmentTrace(params);
     };
     window.addEventListener("hashchange", updateNavState);
     setInterval(() => refresh(running ? Number(document.getElementById("speed").value) : 0), 1000);

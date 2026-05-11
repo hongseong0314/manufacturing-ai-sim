@@ -110,7 +110,9 @@ def test_mes_screen_serves_live_control_room():
     assert 'Budget Plan' in r.text
     assert 'selectable-gantt-bar' in r.text
     assert 'data-machine-id' in r.text
-    assert 'openMachineDetail(bar.dataset.machineId)' in r.text
+    assert 'openAssignmentTraceFromBar(bar)' in r.text
+    assert 'data-correlation-id' in r.text
+    assert 'Assignment Trace Inspector' in r.text
     assert '["A", "B", "C"].includes(String(eq.stage || "").toUpperCase())' in r.text
 
 

@@ -259,6 +259,62 @@ def filter_bars_for_horizon(
     ]
 
 
+def attach_assignment_trace_keys(context: Any, bars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Attach command/correlation/candidate ids to bars when a command matches."""
+    trace_rows = []
+    for command in reversed(context.harness.store.commands()):
+        validated = dict(command.validated_command or {})
+        equipment_id = str(validated.get("equipment_id", ""))
+        stage = str(validated.get("stage") or equipment_id.split("_", 1)[0]).upper()
+        task_uids = {
+            int(uid)
+            for uid in validated.get("task_uids", [])
+            if str(uid).lstrip("-").isdigit()
+        }
+        if not equipment_id or not task_uids:
+            continue
+        trace_rows.append(
+            {
+                "stage": stage,
+                "machine_id": equipment_id,
+                "task_uids": task_uids,
+                "correlation_id": command.correlation_id,
+                "command_id": command.command_id,
+                "candidate_id": validated.get("candidate_id"),
+            }
+        )
+
+    if not trace_rows:
+        return bars
+
+    enriched = []
+    for bar in bars:
+        item = dict(bar)
+        bar_tasks = {
+            int(uid)
+            for uid in (bar.get("batch_task_uids") or bar.get("task_uids") or [])
+            if str(uid).lstrip("-").isdigit()
+        }
+        for trace in trace_rows:
+            if trace["stage"] != str(bar.get("stage", "")).upper():
+                continue
+            if trace["machine_id"] != str(bar.get("machine_id", "")):
+                continue
+            if not bar_tasks or not (bar_tasks & trace["task_uids"]):
+                continue
+            item.update(
+                {
+                    "correlation_id": trace["correlation_id"],
+                    "command_id": trace["command_id"],
+                    "candidate_id": trace["candidate_id"],
+                    "traceable": True,
+                }
+            )
+            break
+        enriched.append(item)
+    return enriched
+
+
 def stage_gantt_view(
     stage: str,
     rows: List[Dict[str, Any]],
@@ -287,6 +343,7 @@ def gantt_state(context: Any, lookback: int = 36, lookahead: int = 12) -> Dict[s
     for stage in STAGES:
         bars.extend(event_to_gantt_bars(context, stage, now))
     bars.extend(planned_gantt_bars(context, decision_state))
+    bars = attach_assignment_trace_keys(context, bars)
     rows = gantt_rows(decision_state)
     horizon = gantt_horizon(now, lookback=lookback, lookahead=lookahead)
     visible_bars = filter_bars_for_horizon(bars, horizon)

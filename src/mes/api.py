@@ -32,6 +32,13 @@ from src.mes.runtime.experiments import (
     run_experiment,
 )
 from src.mes.runtime.gantt import gantt_state
+from src.mes.runtime.genealogy import (
+    digital_twin_state_at as build_digital_twin_state_at,
+    equipment_genealogy as build_equipment_genealogy,
+    execution_ledger as build_execution_ledger,
+    lot_genealogy as build_lot_genealogy,
+    task_genealogy as build_task_genealogy,
+)
 from src.mes.runtime.live_state import fab_kpis, live_fab_state, mes_state
 from src.mes.runtime.simulation_control import (
     generate_tasks as generate_runtime_tasks,
@@ -311,6 +318,31 @@ def assignment_trace(
         correlation_id=correlation_id,
         candidate_id=candidate_id,
     )
+
+
+@app.get("/api/v2/genealogy/task/{task_uid}")
+def genealogy_task(task_uid: int) -> Dict[str, Any]:
+    return build_task_genealogy(context, task_uid)
+
+
+@app.get("/api/v2/genealogy/equipment/{equipment_id}")
+def genealogy_equipment(equipment_id: str) -> Dict[str, Any]:
+    return build_equipment_genealogy(context, equipment_id)
+
+
+@app.get("/api/v2/genealogy/lot/{lot_id}")
+def genealogy_lot(lot_id: str) -> Dict[str, Any]:
+    return build_lot_genealogy(context, lot_id)
+
+
+@app.get("/api/v2/execution-ledger/{correlation_id}")
+def execution_ledger(correlation_id: str) -> Dict[str, Any]:
+    return build_execution_ledger(context, correlation_id)
+
+
+@app.get("/api/v2/digital-twin/state-at")
+def digital_twin_state_at(time: int = Query(..., ge=0)) -> Dict[str, Any]:
+    return build_digital_twin_state_at(context, time)
 
 
 @app.get("/api/v2/equipment/{equipment_id}/detail")

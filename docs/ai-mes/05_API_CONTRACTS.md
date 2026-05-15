@@ -1,7 +1,7 @@
 # API Contracts
 
 Status: canonical  
-Last updated: 2026-05-10
+Last updated: 2026-05-15
 
 ## Purpose
 
@@ -17,6 +17,7 @@ thin and delegate runtime behavior to `src/mes/runtime/*`.
 | run-cycle/run-until/autoplay/generate lot | `src/mes/runtime/simulation_control.py` |
 | live control-room state | `src/mes/runtime/live_state.py` |
 | decision-chain traceability | `src/mes/runtime/decision_trace.py` |
+| assignment and genealogy traceability | `src/mes/runtime/assignment_trace.py`, `src/mes/runtime/genealogy.py` |
 | AI developer console payloads | `src/mes/runtime/ai_dev.py` |
 | equipment detail | `src/mes/runtime/equipment_detail.py` |
 | Gantt state | `src/mes/runtime/gantt.py` |
@@ -46,6 +47,11 @@ thin and delegate runtime behavior to `src/mes/runtime/*`.
 | `GET /api/v2/equipment/{equipment_id}/detail` | A/B/C machine quality and packing detail data |
 | `GET /api/v2/gantt` | Gantt rows, bars, stage views, and horizon |
 | `GET /api/v2/fab/live` | Live control-room state |
+| `GET /api/v2/genealogy/task/{task_uid}` | Task/wafer lineage with assignments, command links, and simulator events |
+| `GET /api/v2/genealogy/equipment/{equipment_id}` | Equipment command and process timeline |
+| `GET /api/v2/genealogy/lot/{lot_id}` | Lot-level task and command rollout |
+| `GET /api/v2/execution-ledger/{correlation_id}` | Correlation-level command, rule, simulator-action, and post-state ledger |
+| `GET /api/v2/digital-twin/state-at?time=0` | Best available replayable decision-state snapshot at or before time |
 
 ## Current Mutation APIs
 
@@ -58,7 +64,7 @@ thin and delegate runtime behavior to `src/mes/runtime/*`.
 | `POST /api/v2/tasks/generate` | Generate simulator tasks |
 | `POST /api/v2/harness/run-cycle` | Run and execute one cycle |
 | `POST /api/v2/harness/run-until` | Run cycles until stop condition |
-| `POST /api/v2/simulation/reset` | Reset simulator runtime |
+| `POST /api/v2/simulation/reset` | Reset simulator runtime and current local audit/ledger state |
 | `POST /api/v2/simulation/autoplay/start` | Enable autoplay |
 | `POST /api/v2/simulation/autoplay/stop` | Disable autoplay |
 | `GET /api/v2/simulation/autoplay/status` | Poll autoplay and optionally step |
@@ -337,8 +343,10 @@ B: 3 equipment, batch_size=2, process_time=8
 C: 3 equipment, batch_size=4, process_time=2, max_packs_per_step=3
 ```
 
-The UI exposes Start, Stop, Run cycle, Generate lot, and Reset. Reset calls
-`POST /api/v2/simulation/reset` and refreshes live state.
+The UI exposes Start, Stop, Run cycle, Generate lot, and Reset. Server startup
+and Reset initialize a clean simulator runtime and clear the current local
+audit/ledger state. V1 does this because simulator task ids are reused after
+reset and no durable run/session id exists yet.
 
 Rule rejects should remain successful HTTP responses when the request shape is
 valid but the recommendation is not executable.
@@ -534,6 +542,100 @@ No-match response:
     "lookup": {...}
 }
 ```
+
+## Digital Twin Genealogy And Execution Ledger APIs
+
+Digital Twin Genealogy V1 adds an execution backbone over the existing
+recommendation chain. Assignment Trace answers "why was this assigned";
+genealogy answers "what did that assignment create over time".
+
+### Task Genealogy
+
+```http
+GET /api/v2/genealogy/task/{task_uid}
+```
+
+Response shape:
+
+```python
+{
+    "found": True,
+    "entity_type": "TASK",
+    "task_uid": 0,
+    "wafer_id": "WAFER_0",
+    "lot_id": "LOYM",
+    "current_state": {"uid": 0, "location": "PROC_A_0"},
+    "related_correlation_ids": ["CORR_..."],
+    "assignments": [
+        {
+            "command_id": "CMD_...",
+            "correlation_id": "CORR_...",
+            "candidate_id": "CAND_...",
+            "stage": "A",
+            "equipment_id": "A_0",
+            "task_uids": [0, 1, 2],
+            "status": "EXECUTED",
+            "trace_url": "/api/v2/assignment-trace?correlation_id=CORR_..."
+        }
+    ],
+    "timeline": [
+        {"event_type": "TASK_CREATED", "time": 0},
+        {"event_type": "COMMAND_CREATED", "time": 0},
+        {"event_type": "EQUIPMENT_STARTED", "time": 0},
+        {"event_type": "COMMAND_EXECUTED", "time": 1}
+    ],
+    "assignment_trace": {
+        "found": True,
+        "correlation_id": "CORR_...",
+        "command_id": "CMD_..."
+    }
+}
+```
+
+### Equipment Genealogy
+
+```http
+GET /api/v2/genealogy/equipment/{equipment_id}
+```
+
+Returns current equipment state, executed command summaries, and simulator
+start/finish events for the tool.
+
+### Lot Genealogy
+
+```http
+GET /api/v2/genealogy/lot/{lot_id}
+```
+
+Rolls task-level timelines up to the lot/job id from simulator task rows.
+
+### Execution Ledger
+
+```http
+GET /api/v2/execution-ledger/{correlation_id}
+```
+
+Response includes:
+
+- `command`: final `MESCommand`,
+- `recommendations`: persisted L4/L3/L1/L2 recommendation records,
+- `validations`: Rule Engine validation records,
+- `records`: ordered event ledger, including `COMMAND_CREATED`,
+  `RULE_VALIDATION_PASSED`, `COMMAND_EXECUTED`, and
+  `SIMULATOR_ACTION_APPLIED`,
+- `decision_state` and `post_state`,
+- `assignment_trace_url`.
+
+### Digital Twin State At Time
+
+```http
+GET /api/v2/digital-twin/state-at?time=0
+```
+
+Returns the best available decision-state snapshot at or before the requested
+time. V1 sources are feature snapshots, post-execution snapshots, and current
+runtime state. This is a replayability contract, not a full event-sourced
+reconstruction yet.
 
 ## API Evolution Rules
 

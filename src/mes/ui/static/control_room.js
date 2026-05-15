@@ -15,6 +15,7 @@
     let selectedExperimentVariantIds = new Set(["baseline_fifo_rule", "c_grouped_packing"]);
     let lastExperiment = null;
     let lastAssignmentTrace = null;
+    let lastGenealogy = null;
     const AI_DEV_CYCLE_LIMIT = 25;
 
     const statusClass = (status) => {
@@ -646,6 +647,7 @@
       renderTraceLayers(trace || {});
       renderTracePortfolio(trace?.candidate_portfolio || {});
       document.getElementById("trace-raw-payload").textContent = JSON.stringify(trace || {}, null, 2);
+      attachTraceGenealogyLink(trace || {});
     }
 
     function renderTraceAssignment(trace) {
@@ -660,7 +662,22 @@
           <dt>Candidate</dt><dd>${renderId(assignment.candidate_id, 32)}</dd>
           <dt>Command</dt><dd>${renderId(assignment.command_id, 28)}</dd>
           <dt>Simulator action</dt><dd>${escapeText(formatGroupKey(trace.simulator_action || {}) || "-")}</dd>
+          <dt>Genealogy</dt><dd><button class="link-button trace-genealogy-link" type="button">Open execution lineage</button></dd>
         </dl>` : `<span class="kpi-note">${escapeText(trace.reason || "Search for an assignment trace.")}</span>`;
+    }
+
+    function attachTraceGenealogyLink(trace) {
+      const button = document.querySelector(".trace-genealogy-link");
+      if (!button || !trace?.found) return;
+      button.onclick = async () => {
+        const assignment = trace.assignment || {};
+        document.getElementById("genealogy-task-uid").value = (assignment.task_uids || [])[0] ?? "";
+        document.getElementById("genealogy-equipment-id").value = assignment.equipment_id || "";
+        document.getElementById("genealogy-correlation-id").value = assignment.correlation_id || "";
+        document.getElementById("genealogy-state-time").value = assignment.start ?? "";
+        location.hash = "genealogy";
+        await loadGenealogy();
+      };
     }
 
     function renderTraceState(trace) {
@@ -715,6 +732,139 @@
           <td>${escapeText(candidate.rejection_reason || (candidate.selected ? "selected_by_l3" : "-"))}</td>
         </tr>`;
       }).join("") || "<tr><td colspan='9'>No portfolio rows for this trace.</td></tr>";
+    }
+
+    async function loadGenealogy() {
+      const inputs = {
+        task_uid: document.getElementById("genealogy-task-uid").value.trim(),
+        equipment_id: document.getElementById("genealogy-equipment-id").value.trim(),
+        lot_id: document.getElementById("genealogy-lot-id").value.trim(),
+        correlation_id: document.getElementById("genealogy-correlation-id").value.trim(),
+        state_time: document.getElementById("genealogy-state-time").value.trim(),
+      };
+      const payload = { inputs, task: null, equipment: null, lot: null, ledger: null, state: null };
+
+      if (inputs.task_uid) {
+        payload.task = await fetch(`/api/v2/genealogy/task/${encodeURIComponent(inputs.task_uid)}`).then(r => r.json());
+        if (payload.task?.found) {
+          inputs.lot_id ||= payload.task.lot_id || "";
+          inputs.equipment_id ||= payload.task.assignments?.[0]?.equipment_id || "";
+          inputs.correlation_id ||= payload.task.assignment_trace?.correlation_id || payload.task.related_correlation_ids?.[0] || "";
+        }
+      }
+      if (inputs.equipment_id) {
+        payload.equipment = await fetch(`/api/v2/genealogy/equipment/${encodeURIComponent(inputs.equipment_id)}`).then(r => r.json());
+      }
+      if (inputs.lot_id) {
+        payload.lot = await fetch(`/api/v2/genealogy/lot/${encodeURIComponent(inputs.lot_id)}`).then(r => r.json());
+      }
+      if (inputs.correlation_id) {
+        payload.ledger = await fetch(`/api/v2/execution-ledger/${encodeURIComponent(inputs.correlation_id)}`).then(r => r.json());
+      }
+      if (inputs.state_time) {
+        payload.state = await fetch(`/api/v2/digital-twin/state-at?time=${encodeURIComponent(inputs.state_time)}`).then(r => r.json());
+      }
+      renderGenealogy(payload);
+      return payload;
+    }
+
+    function renderGenealogy(payload) {
+      lastGenealogy = payload;
+      const foundCount = ["task", "equipment", "lot", "ledger", "state"]
+        .filter(key => payload?.[key]?.found).length;
+      document.getElementById("nav-genealogy").textContent = foundCount ? `${foundCount}` : "-";
+      document.getElementById("genealogy-status").textContent =
+        foundCount ? `${foundCount} genealogy views loaded` : "No genealogy result loaded";
+      renderGenealogyTask(payload?.task || {});
+      renderGenealogyEquipment(payload?.equipment || {});
+      renderGenealogyLot(payload?.lot || {});
+      renderGenealogyState(payload?.state || {});
+      renderGenealogyLedger(payload?.ledger || {});
+      renderGenealogyTimeline(payload || {});
+    }
+
+    function renderGenealogyTask(task) {
+      document.getElementById("genealogy-task-title").textContent =
+        task?.found ? `T${task.task_uid} · ${task.lot_id || "-"}` : (task?.reason || "-");
+      document.getElementById("genealogy-task-summary").innerHTML = task?.found ? `
+        <dl>
+          <dt>Wafer</dt><dd><code>${escapeText(task.wafer_id || "-")}</code></dd>
+          <dt>Current</dt><dd>${escapeText(task.current_state?.location || "-")} · ${escapeText(task.current_state?.customer_id || "-")} · ${escapeText(task.current_state?.material_type || "-")} / ${escapeText(task.current_state?.color || "-")}</dd>
+          <dt>Assignments</dt><dd>${(task.assignments || []).map(item =>
+            `${escapeText(item.stage || "-")} ${escapeText(item.equipment_id || "-")} · ${renderId(item.command_id, 24)}`
+          ).join("<br>") || "-"}</dd>
+          <dt>Correlations</dt><dd>${(task.related_correlation_ids || []).map(id => renderId(id, 24)).join("<br>") || "-"}</dd>
+        </dl>` : "<span class='kpi-note'>Search by task UID to load task lineage.</span>";
+    }
+
+    function renderGenealogyEquipment(equipment) {
+      document.getElementById("genealogy-equipment-title").textContent =
+        equipment?.found ? `${equipment.equipment_id} · ${equipment.commands?.length || 0} commands` : (equipment?.reason || "-");
+      document.getElementById("genealogy-equipment-summary").innerHTML = equipment?.found ? `
+        <dl>
+          <dt>Stage</dt><dd>${escapeText(equipment.stage || "-")}</dd>
+          <dt>Status</dt><dd>${escapeText(equipment.current_state?.status || "-")} · finish t=${escapeText(equipment.current_state?.finish_time ?? "-")}</dd>
+          <dt>Current batch</dt><dd><code>${escapeText(formatTaskList(equipment.current_state?.current_batch_uids || []) || "-")}</code></dd>
+          <dt>Latest commands</dt><dd>${(equipment.commands || []).slice(0, 5).map(item =>
+            `${renderId(item.command_id, 24)} · ${escapeText(formatTaskList(item.task_uids || []) || "-")}`
+          ).join("<br>") || "-"}</dd>
+        </dl>` : "<span class='kpi-note'>Search by equipment ID to load tool timeline.</span>";
+    }
+
+    function renderGenealogyLot(lot) {
+      document.getElementById("genealogy-lot-title").textContent =
+        lot?.found ? `${lot.lot_id} · ${lot.task_count || 0} tasks` : (lot?.reason || "-");
+      document.getElementById("genealogy-lot-summary").innerHTML = lot?.found ? `
+        <dl>
+          <dt>Tasks</dt><dd><code>${escapeText(formatTaskList(lot.task_uids || []) || "-")}</code></dd>
+          <dt>Commands</dt><dd>${(lot.command_ids || []).slice(0, 8).map(id => renderId(id, 24)).join("<br>") || "-"}</dd>
+          <dt>Correlations</dt><dd>${(lot.related_correlation_ids || []).slice(0, 8).map(id => renderId(id, 24)).join("<br>") || "-"}</dd>
+        </dl>` : "<span class='kpi-note'>Search by lot ID or task UID to load lot rollout.</span>";
+    }
+
+    function renderGenealogyState(state) {
+      const summary = state?.summary || {};
+      document.getElementById("genealogy-state-title").textContent =
+        state?.found ? `requested t=${state.requested_time} · source ${state.source || "-"}` : (state?.reason || "-");
+      document.getElementById("genealogy-state-summary").innerHTML = state?.found ? `
+        <dl>
+          <dt>State time</dt><dd>${escapeText(summary.time ?? "-")}</dd>
+          <dt>Completed</dt><dd>${escapeText(summary.num_completed ?? 0)}</dd>
+          <dt>A/B/C</dt><dd>${["A", "B", "C"].map(stage => {
+            const item = summary.stages?.[stage] || {};
+            return `${stage} wait ${item.wait || 0} · in ${item.incoming || 0} · rework ${item.rework || 0} · machines ${item.machines || 0}`;
+          }).join("<br>")}</dd>
+        </dl>` : "<span class='kpi-note'>Enter state time to load replayable snapshot summary.</span>";
+    }
+
+    function renderGenealogyLedger(ledger) {
+      const records = ledger?.records || [];
+      document.getElementById("genealogy-ledger-title").textContent =
+        ledger?.found ? `${ledger.correlation_id} · ${records.length} records` : (ledger?.reason || "-");
+      document.getElementById("genealogy-ledger-body").innerHTML = records.map(record => `
+        <tr>
+          <td>${escapeText(record.time ?? "-")}</td>
+          <td>${escapeText(record.event_type || "-")}</td>
+          <td>${escapeText(record.actor_type || "-")}</td>
+          <td><code>${escapeText(record.equipment_id || "-")}</code></td>
+          <td><code>${escapeText(formatTaskList(record.task_uids || []) || "-")}</code></td>
+          <td>${renderId(record.command_id || record.recommendation_id || record.correlation_id, 28)}</td>
+        </tr>
+      `).join("") || "<tr><td colspan='6'>No execution ledger loaded.</td></tr>";
+    }
+
+    function renderGenealogyTimeline(payload) {
+      const source = payload.task?.found ? payload.task : (payload.equipment?.found ? payload.equipment : payload.lot);
+      const rows = source?.timeline || [];
+      document.getElementById("genealogy-timeline-title").textContent =
+        rows.length ? `${rows.length} lineage events` : "-";
+      document.getElementById("genealogy-timeline").innerHTML = rows.map(record => `
+        <div class="trace-layer-card">
+          <strong>t=${escapeText(record.time ?? "-")} · ${escapeText(record.event_type || "-")}</strong>
+          <span>actor ${escapeText(record.actor_type || "-")} · equipment ${escapeText(record.equipment_id || "-")} · tasks ${escapeText(formatTaskList(record.task_uids || []) || "-")}</span>
+          <span>command ${escapeText(record.command_id || "-")} · correlation ${escapeText(record.correlation_id || "-")}</span>
+        </div>
+      `).join("") || "<span class='kpi-note'>No lineage timeline loaded.</span>";
     }
 
     function renderExperimentRunner(aiDev) {
@@ -1024,6 +1174,7 @@
       document.body.classList.toggle("portfolio-page", hash === "#candidate-portfolio");
       document.body.classList.toggle("ai-dev-page", hash === "#ai-dev");
       document.body.classList.toggle("assignment-trace-page-active", hash === "#assignment-trace");
+      document.body.classList.toggle("genealogy-page-active", hash === "#genealogy");
       document.querySelectorAll(".nav-item").forEach(item => {
         item.classList.toggle("active", item.getAttribute("href") === hash);
       });
@@ -1093,6 +1244,10 @@
       };
       location.hash = "assignment-trace";
       await loadAssignmentTrace(params);
+    };
+    document.getElementById("genealogy-find").onclick = async () => {
+      location.hash = "genealogy";
+      await loadGenealogy();
     };
     document.getElementById("trace-raw-payload-toggle").onclick = () => {
       const payload = document.getElementById("trace-raw-payload");

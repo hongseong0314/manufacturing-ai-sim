@@ -41,6 +41,8 @@ class MESAPIContext:
     def __init__(self) -> None:
         self.env = build_default_env()
         self.store = SQLiteMESStore(default_db_path())
+        self.store.clear_audit_state()
+        self.store.clear_runtime_state()
         self.harness = MESDevelopmentHarness(config=self.env.config, store=self.store)
         self.autoplay_enabled = False
         self.autoplay_target_stage = "AUTO"
@@ -53,6 +55,7 @@ class MESAPIContext:
 
     def reset_runtime(self) -> None:
         self.env = build_default_env()
+        self.store.clear_audit_state()
         self.store.clear_runtime_state()
         self.autoplay_enabled = False
         self.autoplay_target_stage = "AUTO"

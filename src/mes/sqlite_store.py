@@ -117,6 +117,18 @@ class SQLiteMESStore(InMemoryMESStore):
             self._conn.execute(f"DELETE FROM {table}")
         self._conn.commit()
 
+    def clear_audit_state(self) -> None:
+        super().clear_audit_state()
+        for table in (
+            "feature_snapshots",
+            "recommendations",
+            "commands",
+            "validations",
+            "events",
+        ):
+            self._conn.execute(f"DELETE FROM {table}")
+        self._conn.commit()
+
     def record_command_executed(
         self,
         command_id: str,

@@ -132,6 +132,13 @@ class InMemoryMESStore:
         self._equipment.clear()
         self._recipes.clear()
 
+    def clear_audit_state(self) -> None:
+        self._feature_snapshots.clear()
+        self._recommendations.clear()
+        self._validations.clear()
+        self._commands.clear()
+        self._events.clear()
+
     def lots(self) -> List[Lot]:
         return list(self._lots.values())
 
@@ -237,15 +244,32 @@ class InMemoryMESStore:
         if command is None:
             return None
         command.status = "EXECUTED"
+        post_state = dict(post_decision_state or {})
+        execution_payload = {
+            "command": command.to_dict(),
+            "step_result": dict(step_result or {}),
+            "post_time": post_state.get("time"),
+            "num_completed": post_state.get("num_completed"),
+            "post_decision_state": post_state,
+        }
         self.add_event(
             self._command_event(
                 command,
                 event_type="COMMAND_EXECUTED",
+                payload=execution_payload,
+            )
+        )
+        self.add_event(
+            self._command_event(
+                command,
+                event_type="SIMULATOR_ACTION_APPLIED",
                 payload={
+                    "command_id": command.command_id,
                     "command": command.to_dict(),
+                    "simulator_actions": dict(command.simulator_actions or {}),
                     "step_result": dict(step_result or {}),
-                    "post_time": (post_decision_state or {}).get("time"),
-                    "num_completed": (post_decision_state or {}).get("num_completed"),
+                    "post_time": post_state.get("time"),
+                    "post_decision_state": post_state,
                 },
             )
         )

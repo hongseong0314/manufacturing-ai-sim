@@ -25,6 +25,7 @@
         <div class="nav-label">Trace</div>
         <a class="nav-item" href="#chain"><span>Decision Chain</span><span id="nav-chain">-</span></a>
         <a class="nav-item" href="#assignment-trace"><span>Assignment Trace</span><span id="nav-assignment-trace">-</span></a>
+        <a class="nav-item" href="#genealogy"><span>Genealogy</span><span id="nav-genealogy">-</span></a>
         <a class="nav-item" href="#candidate-portfolio"><span>Candidate Portfolio</span><span id="nav-portfolio">-</span></a>
       </div>
       <div class="nav-section" data-nav-section="ai-development">
@@ -266,6 +267,54 @@
                 <button class="button compact" id="trace-raw-payload-toggle" type="button">Show full raw JSON</button>
               </div>
               <pre class="raw-json raw-json-collapsed" id="trace-raw-payload">{}</pre>
+            </div>
+          </div>
+        </section>
+        <section class="page-shell trace-shell" id="genealogy-page" data-page-purpose="digital-twin-ledger">
+          <div class="panel-header">
+            <div>
+              <h2>Digital Twin Genealogy</h2>
+              <p class="section-kicker">Task, lot, equipment, command, and event lineage over simulator time</p>
+            </div>
+            <span id="genealogy-status">Search task, lot, equipment, correlation, or state time</span>
+          </div>
+          <div class="genealogy-search-grid">
+            <label>Task UID<input id="genealogy-task-uid" placeholder="0" inputmode="numeric" /></label>
+            <label>Equipment ID<input id="genealogy-equipment-id" placeholder="A_0" /></label>
+            <label>Lot ID<input id="genealogy-lot-id" placeholder="JOB_..." /></label>
+            <label>Correlation ID<input id="genealogy-correlation-id" placeholder="CORR_..." /></label>
+            <label>State Time<input id="genealogy-state-time" placeholder="0" inputmode="numeric" /></label>
+            <button class="button primary" id="genealogy-find" type="button">Load Genealogy</button>
+          </div>
+          <div class="inspector-grid genealogy-inspector-grid">
+            <div class="panel-lite">
+              <div class="panel-header compact-header"><h2>Task Genealogy</h2><span id="genealogy-task-title">-</span></div>
+              <div class="point-detail" id="genealogy-task-summary"></div>
+            </div>
+            <div class="panel-lite">
+              <div class="panel-header compact-header"><h2>Equipment Timeline</h2><span id="genealogy-equipment-title">-</span></div>
+              <div class="point-detail" id="genealogy-equipment-summary"></div>
+            </div>
+            <div class="panel-lite">
+              <div class="panel-header compact-header"><h2>Lot Genealogy</h2><span id="genealogy-lot-title">-</span></div>
+              <div class="point-detail" id="genealogy-lot-summary"></div>
+            </div>
+            <div class="panel-lite">
+              <div class="panel-header compact-header"><h2>State At Time</h2><span id="genealogy-state-title">-</span></div>
+              <div class="point-detail" id="genealogy-state-summary"></div>
+            </div>
+            <div class="panel-lite genealogy-wide">
+              <div class="panel-header compact-header"><h2>Execution Ledger</h2><span id="genealogy-ledger-title">-</span></div>
+              <div class="table-wrap">
+                <table class="ledger-table">
+                  <thead><tr><th>Time</th><th>Event</th><th>Actor</th><th>Equipment</th><th>Tasks</th><th>Command</th></tr></thead>
+                  <tbody id="genealogy-ledger-body"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="panel-lite genealogy-wide">
+              <div class="panel-header compact-header"><h2>Timeline</h2><span id="genealogy-timeline-title">-</span></div>
+              <div class="trace-layer-list" id="genealogy-timeline"></div>
             </div>
           </div>
         </section>

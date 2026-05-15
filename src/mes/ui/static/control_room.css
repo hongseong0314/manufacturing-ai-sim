@@ -111,7 +111,8 @@
     .kpis { display: grid; gap: 12px; grid-template-columns: repeat(6, 1fr); }
     .panel,
     #ai-dev-console,
-    #assignment-trace-page {
+    #assignment-trace-page,
+    #genealogy-page {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 6px;
@@ -241,6 +242,9 @@
     #assignment-trace-page { display: none; }
     body.assignment-trace-page-active .layout > section:not(#assignment-trace-page) { display: none; }
     body.assignment-trace-page-active #assignment-trace-page { display: block; min-height: calc(100vh - 116px); }
+    #genealogy-page { display: none; }
+    body.genealogy-page-active .layout > section:not(#genealogy-page) { display: none; }
+    body.genealogy-page-active #genealogy-page { display: block; min-height: calc(100vh - 116px); }
     #ai-dev-console { display: none; }
     body.ai-dev-page .layout > section:not(#ai-dev-console) { display: none; }
     body.ai-dev-page #ai-dev-console { display: block; min-height: calc(100vh - 116px); }
@@ -354,6 +358,35 @@
       padding: 7px 8px;
       text-transform: none;
     }
+    .genealogy-search-grid {
+      align-items: end;
+      border-bottom: 1px solid var(--border);
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+      padding: 12px;
+    }
+    .genealogy-search-grid label {
+      color: var(--muted);
+      display: grid;
+      font-size: 11px;
+      font-weight: 650;
+      gap: 5px;
+      text-transform: uppercase;
+    }
+    .genealogy-search-grid input {
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--ink);
+      min-height: 34px;
+      padding: 7px 8px;
+      text-transform: none;
+    }
+    .genealogy-inspector-grid {
+      grid-template-columns: repeat(4, minmax(220px, 1fr));
+    }
+    .genealogy-wide { grid-column: 1 / -1; }
+    .ledger-table { min-width: 1080px; }
     .trace-inspector-grid {
       grid-template-columns: minmax(280px, .75fr) minmax(440px, 1.25fr);
     }

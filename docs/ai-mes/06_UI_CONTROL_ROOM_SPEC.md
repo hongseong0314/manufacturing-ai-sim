@@ -1,7 +1,7 @@
 # UI Control Room Specification
 
 Status: canonical  
-Last updated: 2026-05-10
+Last updated: 2026-05-15
 
 ## Purpose
 
@@ -17,6 +17,29 @@ AI MES. It must help dispatchers, engineers, and AI developers understand:
 - events and genealogy.
 
 The UI must never imply that AI directly executes equipment commands.
+
+## Product Shell Direction
+
+The UI is now treated as the product shell for a Semiconductor Digital Twin MES.
+The simulator remains the execution backend, but screen structure must scale to
+production adapters, genealogy, operator approval, richer equipment state, and
+future digital twin views.
+
+V1 keeps the current FastAPI + static HTML/CSS/JS delivery model. The product
+foundation work focuses on information architecture, reusable UI primitives,
+and dense-data containment rather than a React/Next migration or decorative
+redesign.
+
+`https://github.com/nexu-io/open-design` is used only as a design-system
+reference for enterprise token discipline and product-console patterns. It is
+not a runtime dependency.
+
+| Group | Screens | Primary question |
+|---|---|---|
+| Operate | Fab Control, Flow & Gantt, Equipment, Machine Detail | Is the fab healthy, and what is running where? |
+| Trace | Decision Chain, Assignment Trace, Candidate Portfolio | Why did this decision or assignment happen? |
+| AI Development | AI Dev Console | Which policies, candidates, scores, and experiments explain behavior? |
+| System / Audit | Events | What happened in the execution log? |
 
 ## Visual Source Of Truth
 
@@ -36,6 +59,8 @@ Style:
 - no marketing hero,
 - no decorative gradient blobs,
 - no cards inside cards.
+- Open Design may inform tokens and component primitives, but MES-specific
+  operational clarity wins over any external style preset.
 
 Typography:
 
@@ -193,6 +218,18 @@ Mobile:
 - horizontally scrollable tables,
 - vertical decision chain.
 
+Reusable product primitives:
+
+- `page-shell`: page-level surface and scope.
+- `section-kicker`: short purpose text under section titles.
+- `panel`: bounded information area.
+- `table-scroll`: horizontal/vertical containment for dense tables.
+- `truncate-id`: safe display for long correlation/candidate/command ids.
+- `inspector-grid`: split-pane detail layout.
+- `trace-layer-list`: ordered decision/action timeline.
+- `status`: semantic state chip.
+- `raw-json-collapsed`: contained raw payload inspector.
+
 ## Current UI
 
 Current implementation:
@@ -206,6 +243,10 @@ Current implementation:
 - `src/mes/live_ui.py` remains only as a compatibility import for
   `LIVE_MES_HTML`.
 - UI polls live endpoints.
+- Navigation is grouped by product role: Operate, Trace, AI Development, and
+  System / Audit.
+- `#machine`, `#assignment-trace`, and `#ai-dev` use product-shell semantics and
+  inspector/table primitives so they can grow without one-off layout rules.
 - It already shows WIP, equipment, decision chain, events, Gantt, autoplay,
   reset, A/B machine quality detail, C machine packing detail, L3 budget plan,
   selected candidates, L2 annotations, L3/L4 policy ids, and a Candidate

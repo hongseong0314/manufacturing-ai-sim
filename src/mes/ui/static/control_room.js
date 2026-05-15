@@ -33,6 +33,12 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
 
+    function renderId(value, max = 28) {
+      const text = String(value || "-");
+      const clipped = text.length > max ? `${text.slice(0, max - 1)}…` : text;
+      return `<code class="truncate-id" title="${escapeText(text)}">${escapeText(clipped)}</code>`;
+    }
+
     async function postJSON(url, body) {
       const res = await fetch(url, {
         method: "POST",
@@ -387,7 +393,7 @@
         const group = candidate.group_key || {};
         const annotation = candidate.l2_annotation || {};
         return `<div class="candidate-item">
-          <code>${escapeText(candidate.candidate_id || "-")}</code>
+          ${renderId(candidate.candidate_id, 32)}
           <span>${escapeText(candidate.stage || "-")} · ${escapeText(group.customer_id || "-")} · score ${escapeText(formatMetric(candidate.upper_score ?? candidate.local_score))}</span>
           <span>L2 ${escapeText(annotation.quality_risk || annotation.recipe_id || "-")}</span>
         </div>`;
@@ -519,7 +525,7 @@
       document.getElementById("ai-dev-cycle-body").innerHTML = cycles.map(row => {
         const selected = row.correlation_id === selectedAiDevCorrelation;
         return `<tr class="${selected ? "portfolio-selected" : ""}">
-          <td><button class="link-button ai-dev-cycle-link" type="button" data-corr="${escapeText(row.correlation_id)}"><code>${escapeText(row.correlation_id || "-")}</code></button></td>
+          <td><button class="link-button ai-dev-cycle-link" type="button" data-corr="${escapeText(row.correlation_id)}">${renderId(row.correlation_id, 24)}</button></td>
           <td>${escapeText(row.time ?? "-")}</td>
           <td>${escapeText(row.objective_id || "-")}</td>
           <td>${escapeText(row.selected_stage || "-")}</td>
@@ -651,8 +657,8 @@
           <dt>Equipment</dt><dd><code>${escapeText(assignment.equipment_id || "-")}</code></dd>
           <dt>Tasks</dt><dd><code>${escapeText(formatTaskList(assignment.task_uids || []) || "-")}</code></dd>
           <dt>Window</dt><dd>t=${escapeText(assignment.start ?? "-")}→${escapeText(assignment.end ?? "-")}</dd>
-          <dt>Candidate</dt><dd><code>${escapeText(assignment.candidate_id || "-")}</code></dd>
-          <dt>Command</dt><dd><code>${escapeText(assignment.command_id || "-")}</code></dd>
+          <dt>Candidate</dt><dd>${renderId(assignment.candidate_id, 32)}</dd>
+          <dt>Command</dt><dd>${renderId(assignment.command_id, 28)}</dd>
           <dt>Simulator action</dt><dd>${escapeText(formatGroupKey(trace.simulator_action || {}) || "-")}</dd>
         </dl>` : `<span class="kpi-note">${escapeText(trace.reason || "Search for an assignment trace.")}</span>`;
     }
@@ -683,7 +689,7 @@
         const status = item.rule_validation_status || item.validation_status || item.status || "";
         return `<div class="trace-layer-card">
           <strong>${escapeText(layer)} · ${escapeText(label)}</strong>
-          <code>${escapeText(item.recommendation_id || item.command_id || item.correlation_id || "-")}</code>
+          ${renderId(item.recommendation_id || item.command_id || item.correlation_id, 32)}
           <span>policy ${escapeText(item.policy_id || "-")} · model ${escapeText(item.model_id || "-")}</span>
           <span>status ${escapeText(status || "-")}</span>
           <span>action ${escapeText(formatGroupKey(action) || "-")}</span>
@@ -756,7 +762,7 @@
           <td><code>${escapeText(row.variant_id || "-")}</code></td>
           <td>${escapeText(row.l4_objective_id || "-")}</td>
           <td>${escapeText(row.selected_stage || "-")}</td>
-          <td><code>${escapeText(row.selected_candidate_id || "-")}</code></td>
+          <td>${renderId(row.selected_candidate_id, 32)}</td>
           <td>${escapeText(formatMetric(row.local_score))}</td>
           <td><strong>${escapeText(formatMetric(row.upper_score))}</strong></td>
           <td>${escapeText(row.quality_risk || "-")}</td>
@@ -1087,6 +1093,12 @@
       };
       location.hash = "assignment-trace";
       await loadAssignmentTrace(params);
+    };
+    document.getElementById("trace-raw-payload-toggle").onclick = () => {
+      const payload = document.getElementById("trace-raw-payload");
+      const collapsed = payload.classList.toggle("raw-json-collapsed");
+      document.getElementById("trace-raw-payload-toggle").textContent =
+        collapsed ? "Show full raw JSON" : "Collapse raw JSON";
     };
     window.addEventListener("hashchange", updateNavState);
     setInterval(() => refresh(running ? Number(document.getElementById("speed").value) : 0), 1000);

@@ -1,7 +1,7 @@
 # API Contracts
 
 Status: canonical  
-Last updated: 2026-05-15
+Last updated: 2026-05-17
 
 ## Purpose
 
@@ -47,11 +47,13 @@ thin and delegate runtime behavior to `src/mes/runtime/*`.
 | `GET /api/v2/equipment/{equipment_id}/detail` | A/B/C machine quality and packing detail data |
 | `GET /api/v2/gantt` | Gantt rows, bars, stage views, and horizon |
 | `GET /api/v2/fab/live` | Live control-room state |
-| `GET /api/v2/genealogy/task/{task_uid}` | Task/wafer lineage with assignments, command links, and simulator events |
-| `GET /api/v2/genealogy/equipment/{equipment_id}` | Equipment command and process timeline |
-| `GET /api/v2/genealogy/lot/{lot_id}` | Lot-level task and command rollout |
-| `GET /api/v2/execution-ledger/{correlation_id}` | Correlation-level command, rule, simulator-action, and post-state ledger |
-| `GET /api/v2/digital-twin/state-at?time=0` | Best available replayable decision-state snapshot at or before time |
+| `GET /api/v2/runs` | Current and historical local simulator run/session index |
+| `GET /api/v2/ledger-index/{index_name}` | Run-scoped normalized SQLite index rows |
+| `GET /api/v2/genealogy/task/{task_uid}` | Run-scoped task/wafer lineage with assignments, command links, and simulator events |
+| `GET /api/v2/genealogy/equipment/{equipment_id}` | Run-scoped equipment command and process timeline |
+| `GET /api/v2/genealogy/lot/{lot_id}` | Run-scoped lot-level task and command rollout |
+| `GET /api/v2/execution-ledger/{correlation_id}` | Run-scoped command, rule, simulator-action, and post-state ledger |
+| `GET /api/v2/digital-twin/state-at?time=0` | Run-scoped replayable decision-state snapshot at or before time |
 
 ## Current Mutation APIs
 
@@ -64,7 +66,7 @@ thin and delegate runtime behavior to `src/mes/runtime/*`.
 | `POST /api/v2/tasks/generate` | Generate simulator tasks |
 | `POST /api/v2/harness/run-cycle` | Run and execute one cycle |
 | `POST /api/v2/harness/run-until` | Run cycles until stop condition |
-| `POST /api/v2/simulation/reset` | Reset simulator runtime and current local audit/ledger state |
+| `POST /api/v2/simulation/reset` | Reset simulator runtime and start a new run_id while preserving prior audit/ledger history |
 | `POST /api/v2/simulation/autoplay/start` | Enable autoplay |
 | `POST /api/v2/simulation/autoplay/stop` | Disable autoplay |
 | `GET /api/v2/simulation/autoplay/status` | Poll autoplay and optionally step |
@@ -344,9 +346,10 @@ C: 3 equipment, batch_size=4, process_time=2, max_packs_per_step=3
 ```
 
 The UI exposes Start, Stop, Run cycle, Generate lot, and Reset. Server startup
-and Reset initialize a clean simulator runtime and clear the current local
-audit/ledger state. V1 does this because simulator task ids are reused after
-reset and no durable run/session id exists yet.
+and Reset initialize a clean simulator runtime and start a new `run_id`.
+Historical audit, genealogy, and normalized ledger-index rows are preserved
+under their prior `run_id`, which is required because simulator task ids are
+reused after reset.
 
 Rule rejects should remain successful HTTP responses when the request shape is
 valid but the recommendation is not executable.
@@ -546,8 +549,49 @@ No-match response:
 ## Digital Twin Genealogy And Execution Ledger APIs
 
 Digital Twin Genealogy V1 adds an execution backbone over the existing
-recommendation chain. Assignment Trace answers "why was this assigned";
+recommendation chain. Run-Scoped Normalized Ledger Index V1 adds a durable
+`run_id` namespace and normalized SQLite index tables so resets no longer
+delete prior genealogy. Assignment Trace answers "why was this assigned";
 genealogy answers "what did that assignment create over time".
+
+All genealogy/ledger endpoints default to the current run. Pass `run_id=RUN_...`
+to query prior runs after reset.
+
+### Runs
+
+```http
+GET /api/v2/runs
+```
+
+Response includes:
+
+- `current_run_id`: active simulator run,
+- `items`: historical runs with reason, start time, config metadata, and
+  normalized index counts,
+- `is_current`: whether a row is the active run.
+
+### Normalized Ledger Index
+
+```http
+GET /api/v2/ledger-index/{index_name}?run_id=RUN_...&limit=200
+```
+
+Allowed `index_name` values:
+
+- `run_index`,
+- `task_index`,
+- `lot_index`,
+- `assignment_index`,
+- `equipment_timeline_index`,
+- `command_ledger_index`,
+- `event_ledger_index`,
+- `state_snapshot_index`,
+- `genealogy_edge_index`.
+
+This endpoint exposes the SQLite normalized index rows used by developer
+diagnostics. It is not the final production schema, but it gives stable
+run-scoped lookup surfaces for task, lot, equipment, command, event, and state
+snapshot evidence.
 
 ### Task Genealogy
 
@@ -561,6 +605,7 @@ Response shape:
 {
     "found": True,
     "entity_type": "TASK",
+    "run_id": "RUN_...",
     "task_uid": 0,
     "wafer_id": "WAFER_0",
     "lot_id": "LOYM",
@@ -575,7 +620,7 @@ Response shape:
             "equipment_id": "A_0",
             "task_uids": [0, 1, 2],
             "status": "EXECUTED",
-            "trace_url": "/api/v2/assignment-trace?correlation_id=CORR_..."
+            "trace_url": "/api/v2/assignment-trace?correlation_id=CORR_...&run_id=RUN_..."
         }
     ],
     "timeline": [
@@ -624,12 +669,13 @@ Response includes:
   `RULE_VALIDATION_PASSED`, `COMMAND_EXECUTED`, and
   `SIMULATOR_ACTION_APPLIED`,
 - `decision_state` and `post_state`,
-- `assignment_trace_url`.
+- `assignment_trace_url`,
+- `run_scoped_assignment_trace_url`.
 
 ### Digital Twin State At Time
 
 ```http
-GET /api/v2/digital-twin/state-at?time=0
+GET /api/v2/digital-twin/state-at?time=0&run_id=RUN_...
 ```
 
 Returns the best available decision-state snapshot at or before the requested

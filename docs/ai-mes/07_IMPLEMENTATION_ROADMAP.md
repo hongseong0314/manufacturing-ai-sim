@@ -209,7 +209,8 @@ Acceptance:
 
 ## Phase 8: Persistence And Genealogy
 
-Status: implemented for Digital Twin Genealogy & Execution Ledger V1.
+Status: implemented for Digital Twin Genealogy & Execution Ledger V1 and
+Run-Scoped Normalized Ledger Index V1.
 
 Deliverables:
 
@@ -219,7 +220,12 @@ Deliverables:
 - correlation-level execution ledger,
 - simulator action applied event persistence,
 - decision-state snapshot lookup by simulator time,
-- Assignment Trace to Genealogy UI linkage.
+- Assignment Trace to Genealogy UI linkage,
+- durable `run_id` namespace for startup/reset sessions,
+- reset that preserves prior genealogy under prior run ids,
+- normalized SQLite index tables for runs, tasks, lots, assignments,
+  equipment timeline, commands, events, state snapshots, and genealogy edges,
+- direct `/api/v2/ledger-index/{index_name}` developer index query API.
 
 Acceptance:
 
@@ -231,13 +237,12 @@ Acceptance:
 - lot lookup rolls up related task and command ids,
 - runtime state can be inspected at a requested simulator time from available
   snapshots,
-- SQLite path remains usable for MVP.
+- SQLite path remains usable for MVP,
+- reused task ids after reset resolve to the current run by default and to
+  historical runs when `run_id` is supplied.
 
 Future deliverables:
 
-- durable run/session ids so reset can start a new lineage namespace without
-  deleting previous local audit records,
-- normalized SQLite tables for task, lot, equipment, command, and event indexes,
 - event-sourced WIP reconstruction independent of live simulator state,
 - explicit quality/rework lineage records,
 - durable genealogy queries across process restarts.
@@ -246,12 +251,12 @@ Future deliverables:
 
 Recommended next build order:
 
-1. Normalized genealogy/event indexes beyond command JSON matching.
+1. Event-sourced WIP reconstruction independent of live simulator state.
 2. Scenario preset library and config controls for balanced/A-bottleneck/
    B-bottleneck/stress experiments.
 3. Duplicate same-cycle reservation locks for multi-command AUTO cycles.
 4. Learning-policy adapter contract for L1/L2/L3/L4 experiment variants.
-5. Explicit FeatureSnapshot indexing for every decision cycle.
+5. Richer FeatureSnapshot and state diff indexing for every decision cycle.
 6. Quality/rework lineage records linked to task, recipe/APC, and equipment.
 7. Recipe/APC command endpoints and operator hold/release/approval workflows.
 

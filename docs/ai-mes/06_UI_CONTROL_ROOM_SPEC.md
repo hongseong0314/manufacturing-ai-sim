@@ -265,7 +265,7 @@ Current implementation:
 - `#machine`, `#assignment-trace`, and `#ai-dev` use product-shell semantics and
   inspector/table primitives so they can grow without one-off layout rules.
 - `/mes#genealogy` shows Digital Twin Genealogy V1 with task, lot, equipment,
-  execution ledger, state-at-time, and timeline panels.
+  execution ledger, state-at-time, run selector, and timeline panels.
 - It already shows WIP, equipment, decision chain, events, Gantt, autoplay,
   reset, A/B machine quality detail, C machine packing detail, L3 budget plan,
   selected candidates, L2 annotations, L3/L4 policy ids, and a Candidate
@@ -294,8 +294,9 @@ Current implementation:
 Current limitations:
 
 - It only lightly distinguishes L3/L4 group selection from L1 final pack choice.
-- Genealogy V1 is implemented, but currently uses JSON/event matching rather
-  than normalized task/lot/equipment indexes.
+- Genealogy V1 now has a run-scoped normalized SQLite index, but it is still a
+  developer diagnostic surface rather than a full event-sourced state
+  reconstruction.
 - Operator approval workflows are not implemented.
 
 ## Required UI Evolution
@@ -336,7 +337,7 @@ Avoid vague phrases:
 | Stage board | `/api/v1/wip`, `/api/v1/equipment` | same |
 | Candidate table | `/api/v2/candidate-portfolio/latest`, `/api/v2/candidate-portfolio/{correlation_id}` | same plus richer drilldown |
 | Assignment trace | `/api/v2/assignment-trace`, `/api/v2/gantt` trace keys | same plus richer persisted genealogy linkage |
-| Genealogy | `/api/v2/genealogy/task/{task_uid}`, `/api/v2/genealogy/equipment/{equipment_id}`, `/api/v2/genealogy/lot/{lot_id}`, `/api/v2/execution-ledger/{correlation_id}`, `/api/v2/digital-twin/state-at` | normalized genealogy/event indexes |
+| Genealogy | `/api/v2/runs`, `/api/v2/ledger-index/{index_name}`, `/api/v2/genealogy/task/{task_uid}`, `/api/v2/genealogy/equipment/{equipment_id}`, `/api/v2/genealogy/lot/{lot_id}`, `/api/v2/execution-ledger/{correlation_id}`, `/api/v2/digital-twin/state-at` | event-sourced reconstruction |
 | AI developer console | `/api/v2/ai-dev/policy-stack`, `/api/v2/ai-dev/decision-cycles`, `/api/v2/ai-dev/candidate-portfolio/{correlation_id}`, `/api/v2/ai-dev/scenarios`, `/api/v2/ai-dev/policy-variants`, `/api/v2/ai-dev/experiments/*` | same plus scenario preset library |
 | Decision chain | `/api/v2/decision-chain/{correlation_id}` | same with portfolio metadata |
 | Rule gate | `/api/v1/rules/validate` | same plus layer consistency reasons |

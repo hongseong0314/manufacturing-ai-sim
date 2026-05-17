@@ -8,17 +8,23 @@ from src.mes.adapters import task_uid_from_wafer_id, wafer_id_from_task_uid
 from src.mes.runtime.assignment_trace import assignment_trace
 
 
-def task_genealogy(context: Any, task_uid: int) -> Dict[str, Any]:
+def task_genealogy(
+    context: Any,
+    task_uid: int,
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Return time-ordered digital-twin lineage for one simulator task."""
+    resolved_run_id = _resolve_run_id(context, run_id)
     uid = int(task_uid)
-    task_row = _latest_task_row(context, uid)
+    task_row = _latest_task_row(context, uid, resolved_run_id)
     if task_row is None:
         return _not_found({"task_uid": uid}, "TASK_NOT_FOUND")
 
-    assignments = _assignments_for_task(context, uid)
+    assignments = _assignments_for_task(context, uid, resolved_run_id)
     timeline = [_task_created_record(uid, task_row)]
-    timeline.extend(_event_records_for_task(context, uid))
-    timeline.extend(_simulator_records_for_task(context, uid))
+    timeline.extend(_event_records_for_task(context, uid, resolved_run_id))
+    timeline.extend(_assignment_started_records(assignments))
+    timeline.extend(_simulator_records_for_task(context, uid, resolved_run_id))
     timeline = _dedupe_records(_sort_records(timeline))
 
     related_correlation_ids = _unique(
@@ -33,6 +39,7 @@ def task_genealogy(context: Any, task_uid: int) -> Dict[str, Any]:
             task_uid=uid,
             correlation_id=assignments[0].get("correlation_id"),
             candidate_id=assignments[0].get("candidate_id"),
+            run_id=resolved_run_id,
         )
         if assignments
         else {}
@@ -40,6 +47,7 @@ def task_genealogy(context: Any, task_uid: int) -> Dict[str, Any]:
     return {
         "found": True,
         "entity_type": "TASK",
+        "run_id": resolved_run_id,
         "task_uid": uid,
         "wafer_id": wafer_id_from_task_uid(uid),
         "lot_id": str(task_row.get("job_id") or ""),
@@ -51,10 +59,15 @@ def task_genealogy(context: Any, task_uid: int) -> Dict[str, Any]:
     }
 
 
-def lot_genealogy(context: Any, lot_id: str) -> Dict[str, Any]:
+def lot_genealogy(
+    context: Any,
+    lot_id: str,
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Return lot-level rollout across all simulator task rows in the lot."""
+    resolved_run_id = _resolve_run_id(context, run_id)
     lot_key = str(lot_id)
-    task_rows = _task_rows_for_lot(context, lot_key)
+    task_rows = _task_rows_for_lot(context, lot_key, resolved_run_id)
     if not task_rows:
         return _not_found({"lot_id": lot_key}, "LOT_NOT_FOUND")
 
@@ -62,21 +75,23 @@ def lot_genealogy(context: Any, lot_id: str) -> Dict[str, Any]:
     command_ids = _unique(
         command.command_id
         for uid in task_uids
-        for command in _commands_for_task(context, uid)
+        for command in _commands_for_task(context, uid, resolved_run_id)
     )
     correlations = _unique(
         command.correlation_id
         for uid in task_uids
-        for command in _commands_for_task(context, uid)
+        for command in _commands_for_task(context, uid, resolved_run_id)
     )
     timeline = [_task_created_record(int(row["uid"]), row) for row in task_rows]
     for uid in task_uids:
-        timeline.extend(_event_records_for_task(context, uid))
-        timeline.extend(_simulator_records_for_task(context, uid))
+        timeline.extend(_event_records_for_task(context, uid, resolved_run_id))
+        timeline.extend(_assignment_started_records(_assignments_for_task(context, uid, resolved_run_id)))
+        timeline.extend(_simulator_records_for_task(context, uid, resolved_run_id))
 
     return {
         "found": True,
         "entity_type": "LOT",
+        "run_id": resolved_run_id,
         "lot_id": lot_key,
         "task_count": len(task_uids),
         "task_uids": task_uids,
@@ -86,19 +101,29 @@ def lot_genealogy(context: Any, lot_id: str) -> Dict[str, Any]:
     }
 
 
-def equipment_genealogy(context: Any, equipment_id: str) -> Dict[str, Any]:
+def equipment_genealogy(
+    context: Any,
+    equipment_id: str,
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Return command and event timeline for one equipment id."""
+    resolved_run_id = _resolve_run_id(context, run_id)
     tool_id = str(equipment_id)
-    commands = _commands_for_equipment(context, tool_id)
-    timeline = _event_records_for_equipment(context, tool_id)
-    timeline.extend(_simulator_records_for_equipment(context, tool_id))
-    equipment = _equipment_snapshot(context, tool_id)
+    commands = _commands_for_equipment(context, tool_id, resolved_run_id)
+    timeline = _event_records_for_equipment(context, tool_id, resolved_run_id)
+    timeline.extend(_assignment_started_records([
+        _assignment_from_command(context, command, resolved_run_id)
+        for command in commands
+    ]))
+    timeline.extend(_simulator_records_for_equipment(context, tool_id, resolved_run_id))
+    equipment = _equipment_snapshot(context, tool_id, resolved_run_id)
     if not commands and not timeline and not equipment:
         return _not_found({"equipment_id": tool_id}, "EQUIPMENT_NOT_FOUND")
 
     return {
         "found": True,
         "entity_type": "EQUIPMENT",
+        "run_id": resolved_run_id,
         "equipment_id": tool_id,
         "stage": _stage_from_equipment(tool_id),
         "current_state": equipment or {},
@@ -107,21 +132,27 @@ def equipment_genealogy(context: Any, equipment_id: str) -> Dict[str, Any]:
     }
 
 
-def execution_ledger(context: Any, correlation_id: str) -> Dict[str, Any]:
+def execution_ledger(
+    context: Any,
+    correlation_id: str,
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Return the durable decision-to-execution ledger for one correlation id."""
+    resolved_run_id = _resolve_run_id(context, run_id)
     corr = str(correlation_id)
-    commands = context.harness.store.commands(corr)
-    events = context.harness.store.events(corr)
-    recommendations = context.harness.store.recommendations(corr)
-    validations = context.harness.store.validations(corr)
+    commands = context.harness.store.commands(corr, run_id=resolved_run_id)
+    events = context.harness.store.events(corr, run_id=resolved_run_id)
+    recommendations = context.harness.store.recommendations(corr, run_id=resolved_run_id)
+    validations = context.harness.store.validations(corr, run_id=resolved_run_id)
     if not commands and not events and not recommendations and not validations:
         return _not_found({"correlation_id": corr}, "CORRELATION_NOT_FOUND")
 
-    decision_state = _decision_state_for_correlation(context, corr)
-    post_state = _post_state_for_correlation(context, corr) or {}
+    decision_state = _decision_state_for_correlation(context, corr, resolved_run_id)
+    post_state = _post_state_for_correlation(context, corr, resolved_run_id) or {}
     records = [_event_record(context, event) for event in events]
     return {
         "found": True,
+        "run_id": resolved_run_id,
         "correlation_id": corr,
         "command": commands[-1].to_dict() if commands else {},
         "recommendations": [item.to_dict() for item in recommendations],
@@ -132,18 +163,27 @@ def execution_ledger(context: Any, correlation_id: str) -> Dict[str, Any]:
         "post_state": _json_safe_state(post_state),
         "post_summary": _state_summary(post_state),
         "assignment_trace_url": f"/api/v2/assignment-trace?correlation_id={corr}",
+        "run_scoped_assignment_trace_url": (
+            f"/api/v2/assignment-trace?correlation_id={corr}&run_id={resolved_run_id}"
+        ),
     }
 
 
-def digital_twin_state_at(context: Any, time: int) -> Dict[str, Any]:
+def digital_twin_state_at(
+    context: Any,
+    time: int,
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Return the best available simulator decision state at or before time."""
+    resolved_run_id = _resolve_run_id(context, run_id)
     requested = int(time)
-    selected = _state_at_or_before(context, requested)
+    selected = _state_at_or_before(context, requested, resolved_run_id)
     if selected is None:
         return _not_found({"time": requested}, "NO_STATE_SNAPSHOT")
     source, state = selected
     return {
         "found": True,
+        "run_id": resolved_run_id,
         "requested_time": requested,
         "source": source,
         "state": _json_safe_state(state),
@@ -151,33 +191,44 @@ def digital_twin_state_at(context: Any, time: int) -> Dict[str, Any]:
     }
 
 
-def _assignments_for_task(context: Any, task_uid: int) -> List[Dict[str, Any]]:
+def _resolve_run_id(context: Any, run_id: Optional[str]) -> str:
+    return str(run_id or getattr(context, "run_id", "") or context.harness.store.current_run_id)
+
+
+def _assignments_for_task(
+    context: Any,
+    task_uid: int,
+    run_id: str,
+) -> List[Dict[str, Any]]:
     assignments = []
-    for command in _commands_for_task(context, task_uid):
-        validated = dict(command.validated_command or {})
-        corr = command.correlation_id
-        decision_state = _decision_state_for_correlation(context, corr)
-        assignments.append(
-            {
-                "command_id": command.command_id,
-                "correlation_id": corr,
-                "candidate_id": validated.get("candidate_id"),
-                "stage": str(validated.get("stage") or _stage_from_equipment(validated.get("equipment_id")) or ""),
-                "equipment_id": validated.get("equipment_id"),
-                "task_uids": [int(uid) for uid in validated.get("task_uids", [])],
-                "recipe_id": validated.get("recipe_id"),
-                "recipe": validated.get("recipe"),
-                "start": int((decision_state or {}).get("time", 0) or 0),
-                "status": command.status,
-                "trace_url": f"/api/v2/assignment-trace?correlation_id={corr}",
-            }
-        )
+    for command in _commands_for_task(context, task_uid, run_id):
+        assignments.append(_assignment_from_command(context, command, run_id))
     return assignments
 
 
-def _commands_for_task(context: Any, task_uid: int) -> List[Any]:
+def _assignment_from_command(context: Any, command: Any, run_id: str) -> Dict[str, Any]:
+    validated = dict(command.validated_command or {})
+    corr = command.correlation_id
+    decision_state = _decision_state_for_correlation(context, corr, run_id)
+    return {
+        "run_id": run_id,
+        "command_id": command.command_id,
+        "correlation_id": corr,
+        "candidate_id": validated.get("candidate_id"),
+        "stage": str(validated.get("stage") or _stage_from_equipment(validated.get("equipment_id")) or ""),
+        "equipment_id": validated.get("equipment_id"),
+        "task_uids": [int(uid) for uid in validated.get("task_uids", [])],
+        "recipe_id": validated.get("recipe_id"),
+        "recipe": validated.get("recipe"),
+        "start": int((decision_state or {}).get("time", 0) or 0),
+        "status": command.status,
+        "trace_url": f"/api/v2/assignment-trace?correlation_id={corr}&run_id={run_id}",
+    }
+
+
+def _commands_for_task(context: Any, task_uid: int, run_id: str) -> List[Any]:
     commands = []
-    for command in reversed(context.harness.store.commands()):
+    for command in reversed(context.harness.store.commands(run_id=run_id)):
         validated = dict(command.validated_command or {})
         task_uids = {int(uid) for uid in validated.get("task_uids", [])}
         if int(task_uid) in task_uids:
@@ -185,10 +236,10 @@ def _commands_for_task(context: Any, task_uid: int) -> List[Any]:
     return commands
 
 
-def _commands_for_equipment(context: Any, equipment_id: str) -> List[Any]:
+def _commands_for_equipment(context: Any, equipment_id: str, run_id: str) -> List[Any]:
     return [
         command
-        for command in context.harness.store.commands()
+        for command in context.harness.store.commands(run_id=run_id)
         if str((command.validated_command or {}).get("equipment_id")) == str(equipment_id)
     ]
 
@@ -207,20 +258,24 @@ def _command_summary(command: Any) -> Dict[str, Any]:
     }
 
 
-def _event_records_for_task(context: Any, task_uid: int) -> List[Dict[str, Any]]:
+def _event_records_for_task(context: Any, task_uid: int, run_id: str) -> List[Dict[str, Any]]:
     wafer_id = wafer_id_from_task_uid(task_uid)
     records = []
-    for event in context.harness.store.events():
+    for event in context.harness.store.events(run_id=run_id):
         event_task_uids = _task_uids_from_event(event)
         if int(task_uid) in event_task_uids or wafer_id in set(event.wafer_ids or []):
             records.append(_event_record(context, event))
     return records
 
 
-def _event_records_for_equipment(context: Any, equipment_id: str) -> List[Dict[str, Any]]:
+def _event_records_for_equipment(
+    context: Any,
+    equipment_id: str,
+    run_id: str,
+) -> List[Dict[str, Any]]:
     return [
         _event_record(context, event)
-        for event in context.harness.store.events()
+        for event in context.harness.store.events(run_id=run_id)
         if str(event.equipment_id or "") == str(equipment_id)
     ]
 
@@ -237,6 +292,7 @@ def _event_record(context: Any, event: Any) -> Dict[str, Any]:
         "event_id": event.event_id,
         "event_type": event.event_type,
         "time": _event_time(context, event),
+        "run_id": event.run_id,
         "correlation_id": event.correlation_id,
         "actor_type": event.actor_type,
         "layer_id": event.layer_id,
@@ -251,23 +307,35 @@ def _event_record(context: Any, event: Any) -> Dict[str, Any]:
     }
 
 
-def _simulator_records_for_task(context: Any, task_uid: int) -> List[Dict[str, Any]]:
+def _simulator_records_for_task(
+    context: Any,
+    task_uid: int,
+    run_id: str,
+) -> List[Dict[str, Any]]:
+    if run_id != _resolve_run_id(context, None):
+        return []
     return [
         record
-        for record in _simulator_records(context)
+        for record in _simulator_records(context, run_id)
         if int(task_uid) in {int(uid) for uid in record.get("task_uids", [])}
     ]
 
 
-def _simulator_records_for_equipment(context: Any, equipment_id: str) -> List[Dict[str, Any]]:
+def _simulator_records_for_equipment(
+    context: Any,
+    equipment_id: str,
+    run_id: str,
+) -> List[Dict[str, Any]]:
+    if run_id != _resolve_run_id(context, None):
+        return []
     return [
         record
-        for record in _simulator_records(context)
+        for record in _simulator_records(context, run_id)
         if str(record.get("equipment_id")) == str(equipment_id)
     ]
 
 
-def _simulator_records(context: Any) -> List[Dict[str, Any]]:
+def _simulator_records(context: Any, run_id: str) -> List[Dict[str, Any]]:
     env = context.env
     records = []
     for stage, stage_env in (
@@ -278,11 +346,11 @@ def _simulator_records(context: Any) -> List[Dict[str, Any]]:
         for index, event in enumerate(getattr(stage_env, "event_log", []) or []):
             if not isinstance(event, dict):
                 continue
-            records.append(_simulator_record(stage, index, event))
+            records.append(_simulator_record(stage, index, event, run_id))
     return records
 
 
-def _simulator_record(stage: str, index: int, event: Dict[str, Any]) -> Dict[str, Any]:
+def _simulator_record(stage: str, index: int, event: Dict[str, Any], run_id: str) -> Dict[str, Any]:
     event_type = str(event.get("event_type") or "").lower()
     mapped_type = {
         "task_assigned": "EQUIPMENT_STARTED",
@@ -295,6 +363,7 @@ def _simulator_record(stage: str, index: int, event: Dict[str, Any]) -> Dict[str
         "event_id": f"SIM_{stage}_{index}",
         "event_type": mapped_type,
         "simulator_event_type": event.get("event_type"),
+        "run_id": run_id,
         "time": int(event.get("timestamp", event.get("start_time", 0)) or 0),
         "correlation_id": "",
         "actor_type": "SIMULATOR",
@@ -310,11 +379,38 @@ def _simulator_record(stage: str, index: int, event: Dict[str, Any]) -> Dict[str
     }
 
 
+def _assignment_started_records(assignments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    records = []
+    for assignment in assignments:
+        task_uids = [int(uid) for uid in assignment.get("task_uids", [])]
+        records.append(
+            {
+                "event_id": f"EQUIPMENT_STARTED_{assignment.get('command_id')}",
+                "event_type": "EQUIPMENT_STARTED",
+                "time": int(assignment.get("start", 0) or 0),
+                "run_id": assignment.get("run_id", ""),
+                "correlation_id": assignment.get("correlation_id", ""),
+                "actor_type": "SIMULATOR",
+                "layer_id": None,
+                "recommendation_id": None,
+                "command_id": assignment.get("command_id"),
+                "equipment_id": assignment.get("equipment_id"),
+                "operation_id": assignment.get("stage"),
+                "recipe_id": assignment.get("recipe_id"),
+                "wafer_ids": [wafer_id_from_task_uid(uid) for uid in task_uids],
+                "task_uids": task_uids,
+                "payload": dict(assignment),
+            }
+        )
+    return records
+
+
 def _task_created_record(task_uid: int, task_row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "event_id": f"TASK_CREATED_{task_uid}",
         "event_type": "TASK_CREATED",
         "time": int(task_row.get("arrival_time", 0) or 0),
+        "run_id": task_row.get("run_id", ""),
         "correlation_id": "",
         "actor_type": "SIMULATOR",
         "layer_id": None,
@@ -365,12 +461,20 @@ def _event_time(context: Any, event: Any) -> int:
     validated = dict(command.get("validated_command") or {})
     if validated.get("start_time") is not None:
         return int(validated.get("start_time") or 0)
-    decision_state = _decision_state_for_correlation(context, event.correlation_id)
+    decision_state = _decision_state_for_correlation(
+        context,
+        event.correlation_id,
+        event.run_id,
+    )
     return int((decision_state or {}).get("time", 0) or 0)
 
 
-def _decision_state_for_correlation(context: Any, correlation_id: str) -> Dict[str, Any]:
-    snapshots = context.harness.store.feature_snapshots(correlation_id)
+def _decision_state_for_correlation(
+    context: Any,
+    correlation_id: str,
+    run_id: str,
+) -> Dict[str, Any]:
+    snapshots = context.harness.store.feature_snapshots(correlation_id, run_id=run_id)
     for preferred_layer in ("L4", "PORTFOLIO", "L3", "L1", "L2"):
         for snapshot in snapshots:
             if snapshot.layer_id == preferred_layer:
@@ -380,8 +484,12 @@ def _decision_state_for_correlation(context: Any, correlation_id: str) -> Dict[s
     return {}
 
 
-def _post_state_for_correlation(context: Any, correlation_id: str) -> Dict[str, Any]:
-    for event in reversed(context.harness.store.events(correlation_id)):
+def _post_state_for_correlation(
+    context: Any,
+    correlation_id: str,
+    run_id: str,
+) -> Dict[str, Any]:
+    for event in reversed(context.harness.store.events(correlation_id, run_id=run_id)):
         payload = dict(event.payload or {})
         state = payload.get("post_decision_state")
         if isinstance(state, dict) and state:
@@ -389,8 +497,12 @@ def _post_state_for_correlation(context: Any, correlation_id: str) -> Dict[str, 
     return {}
 
 
-def _state_at_or_before(context: Any, requested: int) -> Optional[Tuple[str, Dict[str, Any]]]:
-    snapshots = _state_snapshots(context)
+def _state_at_or_before(
+    context: Any,
+    requested: int,
+    run_id: str,
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    snapshots = _state_snapshots(context, run_id)
     eligible = [
         (source, state)
         for source, state in snapshots
@@ -401,40 +513,56 @@ def _state_at_or_before(context: Any, requested: int) -> Optional[Tuple[str, Dic
     return snapshots[0] if snapshots else None
 
 
-def _state_snapshots(context: Any) -> List[Tuple[str, Dict[str, Any]]]:
+def _state_snapshots(context: Any, run_id: str) -> List[Tuple[str, Dict[str, Any]]]:
     snapshots: List[Tuple[str, Dict[str, Any]]] = []
-    for snapshot in context.harness.store.feature_snapshots():
+    try:
+        index_rows = context.harness.store.normalized_index_rows(
+            "state_snapshot_index",
+            run_id=run_id,
+            limit=1000,
+        )
+    except (AttributeError, ValueError):
+        index_rows = []
+    for row in index_rows:
+        payload = dict(row.get("payload") or {})
+        state = dict(payload.get("decision_state") or {})
+        if state:
+            snapshots.append((f"state_index:{payload.get('snapshot_id')}", state))
+    for snapshot in context.harness.store.feature_snapshots(run_id=run_id):
         state = dict(snapshot.decision_state or {})
         if state:
             snapshots.append((f"feature_snapshot:{snapshot.feature_snapshot_id}", state))
-    for event in context.harness.store.events():
+    for event in context.harness.store.events(run_id=run_id):
         payload = dict(event.payload or {})
         state = payload.get("post_decision_state")
         if isinstance(state, dict) and state:
             snapshots.append((f"event:{event.event_id}", dict(state)))
     current = context.env.get_decision_state()
-    if current:
+    if run_id == _resolve_run_id(context, None) and current:
         snapshots.append(("current_runtime", dict(current)))
     snapshots.sort(key=lambda item: int(item[1].get("time", 0) or 0))
     return snapshots
 
 
-def _latest_task_row(context: Any, task_uid: int) -> Optional[Dict[str, Any]]:
-    for _source, state in reversed(_state_snapshots(context)):
+def _latest_task_row(context: Any, task_uid: int, run_id: str) -> Optional[Dict[str, Any]]:
+    for _source, state in reversed(_state_snapshots(context, run_id)):
         row = _task_row_from_state(state, task_uid)
         if row is not None:
+            row.setdefault("run_id", run_id)
             return row
     return None
 
 
-def _task_rows_for_lot(context: Any, lot_id: str) -> List[Dict[str, Any]]:
+def _task_rows_for_lot(context: Any, lot_id: str, run_id: str) -> List[Dict[str, Any]]:
     rows: Dict[int, Dict[str, Any]] = {}
-    for _source, state in _state_snapshots(context):
+    for _source, state in _state_snapshots(context, run_id):
         for row in (state.get("tasks", {}) or {}).values():
             if isinstance(row, dict) and str(row.get("job_id")) == lot_id:
                 uid = row.get("uid")
                 if uid is not None:
-                    rows[int(uid)] = dict(row)
+                    item = dict(row)
+                    item.setdefault("run_id", run_id)
+                    rows[int(uid)] = item
     return [rows[uid] for uid in sorted(rows)]
 
 
@@ -446,7 +574,9 @@ def _task_row_from_state(state: Dict[str, Any], task_uid: int) -> Optional[Dict[
     return dict(row) if isinstance(row, dict) else None
 
 
-def _equipment_snapshot(context: Any, equipment_id: str) -> Dict[str, Any]:
+def _equipment_snapshot(context: Any, equipment_id: str, run_id: str) -> Dict[str, Any]:
+    if run_id != _resolve_run_id(context, None):
+        return {}
     state = context.env.get_decision_state()
     stage = _stage_from_equipment(equipment_id)
     if not stage:
@@ -493,7 +623,13 @@ def _assignment_trace_summary(trace: Dict[str, Any]) -> Dict[str, Any]:
         "candidate_id": assignment.get("candidate_id"),
         "equipment_id": assignment.get("equipment_id"),
         "task_uids": assignment.get("task_uids", []),
+        "run_id": trace.get("run_id") or assignment.get("run_id"),
         "url": f"/api/v2/assignment-trace?correlation_id={assignment.get('correlation_id')}",
+        "run_scoped_url": (
+            "/api/v2/assignment-trace?"
+            f"correlation_id={assignment.get('correlation_id')}"
+            f"&run_id={trace.get('run_id') or assignment.get('run_id')}"
+        ),
     }
 
 

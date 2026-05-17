@@ -262,7 +262,8 @@ def filter_bars_for_horizon(
 def attach_assignment_trace_keys(context: Any, bars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Attach command/correlation/candidate ids to bars when a command matches."""
     trace_rows = []
-    for command in reversed(context.harness.store.commands()):
+    run_id = getattr(context, "run_id", "") or context.harness.store.current_run_id
+    for command in reversed(context.harness.store.commands(run_id=run_id)):
         validated = dict(command.validated_command or {})
         equipment_id = str(validated.get("equipment_id", ""))
         stage = str(validated.get("stage") or equipment_id.split("_", 1)[0]).upper()
@@ -281,6 +282,7 @@ def attach_assignment_trace_keys(context: Any, bars: List[Dict[str, Any]]) -> Li
                 "correlation_id": command.correlation_id,
                 "command_id": command.command_id,
                 "candidate_id": validated.get("candidate_id"),
+                "run_id": command.run_id,
             }
         )
 
@@ -307,6 +309,7 @@ def attach_assignment_trace_keys(context: Any, bars: List[Dict[str, Any]]) -> Li
                     "correlation_id": trace["correlation_id"],
                     "command_id": trace["command_id"],
                     "candidate_id": trace["candidate_id"],
+                    "run_id": trace["run_id"],
                     "traceable": True,
                 }
             )

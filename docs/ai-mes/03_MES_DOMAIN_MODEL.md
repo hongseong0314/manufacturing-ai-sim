@@ -243,8 +243,23 @@ Product -> Lot -> Wafer -> Operation -> Equipment -> Recipe -> QA result
 - commands,
 - events.
 
-`SQLiteMESStore` persists these records as JSON payloads in local SQLite tables.
-This is a practical MVP store, not the final normalized database.
+`SQLiteMESStore` persists these records as JSON payloads in local SQLite tables
+and maintains a run-scoped normalized index for developer genealogy queries.
+The normalized index is intentionally narrow and append-oriented:
+
+- `run_index`,
+- `task_index`,
+- `lot_index`,
+- `assignment_index`,
+- `equipment_timeline_index`,
+- `command_ledger_index`,
+- `event_ledger_index`,
+- `state_snapshot_index`,
+- `genealogy_edge_index`.
+
+Reset starts a new `run_id` and clears only the live simulator/runtime cache.
+Historical command, event, task, lot, equipment, and state snapshot evidence
+remains queryable by `run_id`.
 
 ### Target Store
 

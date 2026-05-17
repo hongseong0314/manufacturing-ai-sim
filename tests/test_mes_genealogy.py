@@ -99,15 +99,17 @@ def test_digital_twin_state_at_returns_replayable_state_summary():
     assert task_key in body["state"]["tasks"]
 
 
-def test_reset_clears_stale_genealogy_for_reused_task_ids():
-    _run_a_cycle()
+def test_reset_scopes_reused_task_ids_to_the_current_run_by_default():
+    _payload, command, validated = _run_a_cycle()
+    task_uid = validated["task_uids"][0]
 
     client.post("/api/v2/simulation/reset")
-    body = client.get("/api/v2/genealogy/task/0").json()
+    body = client.get(f"/api/v2/genealogy/task/{task_uid}").json()
 
     assert body["found"] is True
     assert body["assignments"] == []
     assert not any(item["event_type"] == "COMMAND_CREATED" for item in body["timeline"])
+    assert body["run_id"] != command["run_id"]
 
 
 def test_control_room_contains_genealogy_page_mount():

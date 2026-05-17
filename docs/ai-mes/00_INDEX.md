@@ -98,8 +98,9 @@ Implemented today:
 - Decision service: `src/mes/services.py` is a facade over
   `src/mes/decision/candidates.py`, `annotations.py`, and
   `simulator_actions.py`.
-- Store: in-memory plus SQLite JSON payload persistence for audit records and
-  runtime entities.
+- Store: in-memory plus SQLite JSON payload persistence and run-scoped
+  normalized ledger indexes for audit records, runtime entities, genealogy,
+  assignments, commands, events, and state snapshots.
 - API/UI: live simulator-backed MES endpoints and a dense `/mes` control room
   with Candidate Portfolio, Assignment Trace, AI Developer Console, Policy
   Experiment Runner, Product UI Foundation, and Digital Twin Genealogy V1.
@@ -109,7 +110,7 @@ Implemented today:
 
 Not yet implemented:
 
-- Normalized genealogy/event indexes beyond JSON payload matching.
+- Event-sourced WIP reconstruction as the primary digital twin state source.
 - Runtime experiment preset controls for balanced/A-bottleneck/B-bottleneck
   scenarios.
 - Production reservation locks, operator approvals, auth/roles, or SECS/GEM.

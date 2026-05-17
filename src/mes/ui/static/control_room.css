@@ -363,7 +363,7 @@
       border-bottom: 1px solid var(--border);
       display: grid;
       gap: 10px;
-      grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+      grid-template-columns: repeat(6, minmax(0, 1fr)) auto;
       padding: 12px;
     }
     .genealogy-search-grid label {
@@ -374,7 +374,8 @@
       gap: 5px;
       text-transform: uppercase;
     }
-    .genealogy-search-grid input {
+    .genealogy-search-grid input,
+    .genealogy-search-grid select {
       border: 1px solid var(--border);
       border-radius: 4px;
       color: var(--ink);

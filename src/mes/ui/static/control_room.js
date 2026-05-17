@@ -16,6 +16,8 @@
     let lastExperiment = null;
     let lastAssignmentTrace = null;
     let lastGenealogy = null;
+    let lastRuns = null;
+    let selectedGenealogyRunId = "";
     const AI_DEV_CYCLE_LIMIT = 25;
 
     const statusClass = (status) => {
@@ -61,14 +63,15 @@
 
     async function loadAiDevSummary() {
       try {
-        const [policyStack, decisionCycles, policyVariants, scenarios, experiments] = await Promise.all([
+        const [policyStack, decisionCycles, policyVariants, scenarios, experiments, runs] = await Promise.all([
           fetch("/api/v2/ai-dev/policy-stack").then(r => r.json()),
           fetch(`/api/v2/ai-dev/decision-cycles?limit=${AI_DEV_CYCLE_LIMIT}`).then(r => r.json()),
           fetch("/api/v2/ai-dev/policy-variants").then(r => r.json()),
           fetch("/api/v2/ai-dev/scenarios").then(r => r.json()),
           fetch("/api/v2/ai-dev/experiments").then(r => r.json()),
+          fetch("/api/v2/runs").then(r => r.json()),
         ]);
-        return { policyStack, decisionCycles, policyVariants, scenarios, experiments };
+        return { policyStack, decisionCycles, policyVariants, scenarios, experiments, runs };
       } catch (error) {
         return {
           policyStack: {},
@@ -76,6 +79,7 @@
           policyVariants: { items: [] },
           scenarios: { items: [] },
           experiments: { items: [] },
+          runs: { items: [] },
         };
       }
     }
@@ -106,6 +110,7 @@
       renderChain(chain);
       renderPortfolio(live.candidate_portfolio || chain.candidate_portfolio || {});
       renderAiDev(live, aiDev);
+      renderRunSelector(aiDev.runs || {});
       renderEvents(live.recent_events || []);
       renderGantt(gantt || {}, live);
       updateNavState();
@@ -675,6 +680,11 @@
         document.getElementById("genealogy-equipment-id").value = assignment.equipment_id || "";
         document.getElementById("genealogy-correlation-id").value = assignment.correlation_id || "";
         document.getElementById("genealogy-state-time").value = assignment.start ?? "";
+        selectedGenealogyRunId = assignment.run_id || trace.run_id || selectedGenealogyRunId;
+        const runSelect = document.getElementById("genealogy-run-id");
+        if (runSelect && selectedGenealogyRunId) {
+          runSelect.value = selectedGenealogyRunId;
+        }
         location.hash = "genealogy";
         await loadGenealogy();
       };
@@ -734,8 +744,38 @@
       }).join("") || "<tr><td colspan='9'>No portfolio rows for this trace.</td></tr>";
     }
 
+    function renderRunSelector(payload) {
+      lastRuns = payload || lastRuns;
+      const select = document.getElementById("genealogy-run-id");
+      if (!select) return;
+      const currentRunId = lastRuns?.current_run_id || "";
+      const items = [...(lastRuns?.items || [])].reverse();
+      if (!selectedGenealogyRunId && currentRunId) {
+        selectedGenealogyRunId = currentRunId;
+      }
+      select.innerHTML = items.map(run => {
+        const label = `${run.is_current ? "current" : run.reason || "run"} · ${run.run_id} · t=${run.start_time ?? 0}`;
+        return `<option value="${escapeText(run.run_id)}">${escapeText(label)}</option>`;
+      }).join("") || `<option value="${escapeText(currentRunId)}">${escapeText(currentRunId || "current run")}</option>`;
+      if (selectedGenealogyRunId) {
+        select.value = selectedGenealogyRunId;
+      }
+    }
+
+    function genealogyRunParam() {
+      const select = document.getElementById("genealogy-run-id");
+      return (select?.value || selectedGenealogyRunId || "").trim();
+    }
+
+    function withRunParam(url, runId) {
+      if (!runId) return url;
+      return `${url}${url.includes("?") ? "&" : "?"}run_id=${encodeURIComponent(runId)}`;
+    }
+
     async function loadGenealogy() {
+      selectedGenealogyRunId = genealogyRunParam();
       const inputs = {
+        run_id: selectedGenealogyRunId,
         task_uid: document.getElementById("genealogy-task-uid").value.trim(),
         equipment_id: document.getElementById("genealogy-equipment-id").value.trim(),
         lot_id: document.getElementById("genealogy-lot-id").value.trim(),
@@ -745,7 +785,7 @@
       const payload = { inputs, task: null, equipment: null, lot: null, ledger: null, state: null };
 
       if (inputs.task_uid) {
-        payload.task = await fetch(`/api/v2/genealogy/task/${encodeURIComponent(inputs.task_uid)}`).then(r => r.json());
+        payload.task = await fetch(withRunParam(`/api/v2/genealogy/task/${encodeURIComponent(inputs.task_uid)}`, inputs.run_id)).then(r => r.json());
         if (payload.task?.found) {
           inputs.lot_id ||= payload.task.lot_id || "";
           inputs.equipment_id ||= payload.task.assignments?.[0]?.equipment_id || "";
@@ -753,16 +793,16 @@
         }
       }
       if (inputs.equipment_id) {
-        payload.equipment = await fetch(`/api/v2/genealogy/equipment/${encodeURIComponent(inputs.equipment_id)}`).then(r => r.json());
+        payload.equipment = await fetch(withRunParam(`/api/v2/genealogy/equipment/${encodeURIComponent(inputs.equipment_id)}`, inputs.run_id)).then(r => r.json());
       }
       if (inputs.lot_id) {
-        payload.lot = await fetch(`/api/v2/genealogy/lot/${encodeURIComponent(inputs.lot_id)}`).then(r => r.json());
+        payload.lot = await fetch(withRunParam(`/api/v2/genealogy/lot/${encodeURIComponent(inputs.lot_id)}`, inputs.run_id)).then(r => r.json());
       }
       if (inputs.correlation_id) {
-        payload.ledger = await fetch(`/api/v2/execution-ledger/${encodeURIComponent(inputs.correlation_id)}`).then(r => r.json());
+        payload.ledger = await fetch(withRunParam(`/api/v2/execution-ledger/${encodeURIComponent(inputs.correlation_id)}`, inputs.run_id)).then(r => r.json());
       }
       if (inputs.state_time) {
-        payload.state = await fetch(`/api/v2/digital-twin/state-at?time=${encodeURIComponent(inputs.state_time)}`).then(r => r.json());
+        payload.state = await fetch(withRunParam(`/api/v2/digital-twin/state-at?time=${encodeURIComponent(inputs.state_time)}`, inputs.run_id)).then(r => r.json());
       }
       renderGenealogy(payload);
       return payload;
@@ -1051,7 +1091,7 @@
       const top = stackSize > 1 ? 6 + stackIndex * (height + gap) : 10;
       const batchLabel = bar.batch_id !== null && bar.batch_id !== undefined ? ` batch=${bar.batch_id}` : "";
       const title = `${bar.machine_id} t=${bar.start}→${bar.end}${batchLabel} tasks=${batchUids}`;
-      return `<span class="gantt-bar ${cls} selectable-gantt-bar" data-machine-id="${escapeText(bar.machine_id)}" data-stage="${escapeText(bar.stage)}" data-task-uids="${escapeText((bar.task_uids || []).join(","))}" data-batch-uids="${escapeText((bar.batch_task_uids || bar.task_uids || []).join(","))}" data-correlation-id="${escapeText(bar.correlation_id || "")}" data-command-id="${escapeText(bar.command_id || "")}" data-candidate-id="${escapeText(bar.candidate_id || "")}" style="left:${left}%;width:${width}%;top:${top}px;height:${height}px;" title="${escapeText(title)}">${escapeText(bar.label || uids || bar.status)}</span>`;
+      return `<span class="gantt-bar ${cls} selectable-gantt-bar" data-machine-id="${escapeText(bar.machine_id)}" data-stage="${escapeText(bar.stage)}" data-task-uids="${escapeText((bar.task_uids || []).join(","))}" data-batch-uids="${escapeText((bar.batch_task_uids || bar.task_uids || []).join(","))}" data-correlation-id="${escapeText(bar.correlation_id || "")}" data-command-id="${escapeText(bar.command_id || "")}" data-candidate-id="${escapeText(bar.candidate_id || "")}" data-run-id="${escapeText(bar.run_id || "")}" style="left:${left}%;width:${width}%;top:${top}px;height:${height}px;" title="${escapeText(title)}">${escapeText(bar.label || uids || bar.status)}</span>`;
     }
 
     function attachGanttBarHandlers(target) {
@@ -1069,6 +1109,7 @@
         task_uid: taskUid,
         correlation_id: bar.dataset.correlationId || "",
         candidate_id: bar.dataset.candidateId || "",
+        run_id: bar.dataset.runId || "",
       };
       document.getElementById("trace-equipment-id").value = params.equipment_id;
       document.getElementById("trace-task-uid").value = params.task_uid;
@@ -1248,6 +1289,12 @@
     document.getElementById("genealogy-find").onclick = async () => {
       location.hash = "genealogy";
       await loadGenealogy();
+    };
+    document.getElementById("genealogy-run-id").onchange = async (event) => {
+      selectedGenealogyRunId = event.target.value || "";
+      if (location.hash === "#genealogy") {
+        await loadGenealogy();
+      }
     };
     document.getElementById("trace-raw-payload-toggle").onclick = () => {
       const payload = document.getElementById("trace-raw-payload");

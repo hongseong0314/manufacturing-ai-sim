@@ -5,16 +5,18 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 
-def latest_candidate_portfolio(context: Any) -> Dict[str, Any]:
-    snapshots = _portfolio_snapshots(context)
+def latest_candidate_portfolio(context: Any, run_id: Optional[str] = None) -> Dict[str, Any]:
+    resolved_run_id = _resolve_run_id(context, run_id)
+    snapshots = _portfolio_snapshots(context, resolved_run_id)
     if not snapshots:
-        return _empty_payload(None)
-    latest_empty = _latest_empty_snapshot(context)
-    latest_actionable = _latest_actionable_snapshot(context)
+        return _empty_payload(None, resolved_run_id)
+    latest_empty = _latest_empty_snapshot(context, resolved_run_id)
+    latest_actionable = _latest_actionable_snapshot(context, resolved_run_id)
     selected = latest_actionable or snapshots[-1]
     return candidate_portfolio(
         context,
         selected.correlation_id,
+        run_id=resolved_run_id,
         last_actionable_correlation_id=(
             latest_actionable.correlation_id if latest_actionable else None
         ),
@@ -25,32 +27,35 @@ def latest_candidate_portfolio(context: Any) -> Dict[str, Any]:
 def candidate_portfolio(
     context: Any,
     correlation_id: Optional[str],
+    run_id: Optional[str] = None,
     last_actionable_correlation_id: Optional[str] = None,
     latest_empty_correlation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    resolved_run_id = _resolve_run_id(context, run_id)
     if not correlation_id:
-        return _empty_payload(None)
+        return _empty_payload(None, resolved_run_id)
 
-    snapshot = _portfolio_snapshot(context, correlation_id)
+    snapshot = _portfolio_snapshot(context, correlation_id, resolved_run_id)
     if snapshot is None:
-        return _empty_payload(correlation_id)
+        return _empty_payload(correlation_id, resolved_run_id)
 
     features = dict(snapshot.features or {})
     items = [
-        _augment_candidate(context, correlation_id, dict(candidate))
+        _augment_candidate(context, correlation_id, dict(candidate), resolved_run_id)
         for candidate in features.get("candidates", [])
         if isinstance(candidate, dict)
     ]
     summary = portfolio_summary_from_items(features, items)
     is_actionable = _is_actionable(features, items)
     if last_actionable_correlation_id is None:
-        actionable = _latest_actionable_snapshot(context)
+        actionable = _latest_actionable_snapshot(context, resolved_run_id)
         last_actionable_correlation_id = actionable.correlation_id if actionable else None
     if latest_empty_correlation_id is None:
-        empty = _latest_empty_snapshot(context)
+        empty = _latest_empty_snapshot(context, resolved_run_id)
         latest_empty_correlation_id = empty.correlation_id if empty else None
     return {
         "correlation_id": correlation_id,
+        "run_id": resolved_run_id,
         "feature_snapshot_id": snapshot.feature_snapshot_id,
         "kind": "ACTIONABLE" if is_actionable else "EMPTY",
         "is_actionable": is_actionable,
@@ -64,8 +69,12 @@ def candidate_portfolio(
     }
 
 
-def portfolio_summary(context: Any, correlation_id: Optional[str]) -> Dict[str, Any]:
-    payload = candidate_portfolio(context, correlation_id)
+def portfolio_summary(
+    context: Any,
+    correlation_id: Optional[str],
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    payload = candidate_portfolio(context, correlation_id, run_id=run_id)
     return payload["summary"]
 
 
@@ -96,9 +105,10 @@ def portfolio_summary_from_items(
     }
 
 
-def _empty_payload(correlation_id: Optional[str]) -> Dict[str, Any]:
+def _empty_payload(correlation_id: Optional[str], run_id: str = "") -> Dict[str, Any]:
     return {
         "correlation_id": correlation_id,
+        "run_id": run_id,
         "feature_snapshot_id": None,
         "kind": "EMPTY",
         "is_actionable": False,
@@ -112,16 +122,16 @@ def _empty_payload(correlation_id: Optional[str]) -> Dict[str, Any]:
     }
 
 
-def _portfolio_snapshots(context: Any) -> List[Any]:
+def _portfolio_snapshots(context: Any, run_id: Optional[str] = None) -> List[Any]:
     return [
         snapshot
-        for snapshot in context.harness.store.feature_snapshots()
+        for snapshot in context.harness.store.feature_snapshots(run_id=run_id)
         if snapshot.layer_id == "PORTFOLIO"
     ]
 
 
-def _latest_actionable_snapshot(context: Any) -> Optional[Any]:
-    for snapshot in reversed(_portfolio_snapshots(context)):
+def _latest_actionable_snapshot(context: Any, run_id: Optional[str] = None) -> Optional[Any]:
+    for snapshot in reversed(_portfolio_snapshots(context, run_id)):
         features = dict(snapshot.features or {})
         items = [
             dict(candidate)
@@ -133,8 +143,8 @@ def _latest_actionable_snapshot(context: Any) -> Optional[Any]:
     return None
 
 
-def _latest_empty_snapshot(context: Any) -> Optional[Any]:
-    for snapshot in reversed(_portfolio_snapshots(context)):
+def _latest_empty_snapshot(context: Any, run_id: Optional[str] = None) -> Optional[Any]:
+    for snapshot in reversed(_portfolio_snapshots(context, run_id)):
         features = dict(snapshot.features or {})
         items = [
             dict(candidate)
@@ -151,10 +161,14 @@ def _latest_portfolio_snapshot(context: Any) -> Optional[Any]:
     return snapshots[-1] if snapshots else None
 
 
-def _portfolio_snapshot(context: Any, correlation_id: str) -> Optional[Any]:
+def _portfolio_snapshot(
+    context: Any,
+    correlation_id: str,
+    run_id: Optional[str] = None,
+) -> Optional[Any]:
     snapshots = [
         snapshot
-        for snapshot in context.harness.store.feature_snapshots(correlation_id)
+        for snapshot in context.harness.store.feature_snapshots(correlation_id, run_id=run_id)
         if snapshot.layer_id == "PORTFOLIO"
     ]
     return snapshots[-1] if snapshots else None
@@ -164,13 +178,14 @@ def _augment_candidate(
     context: Any,
     correlation_id: str,
     candidate: Dict[str, Any],
+    run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     candidate_id = str(candidate.get("candidate_id") or "")
     linked = dict(candidate.get("linked_recommendation_ids") or {})
     command_id = None
     command_status = None
 
-    for recommendation in context.harness.store.recommendations(correlation_id):
+    for recommendation in context.harness.store.recommendations(correlation_id, run_id=run_id):
         action = dict(recommendation.recommended_action or {})
         if action.get("candidate_id") != candidate_id:
             continue
@@ -179,7 +194,7 @@ def _augment_candidate(
             command_id = recommendation.final_command_id
 
     if command_id:
-        for command in context.harness.store.commands(correlation_id):
+        for command in context.harness.store.commands(correlation_id, run_id=run_id):
             if command.command_id == command_id:
                 command_status = command.status
                 break
@@ -198,6 +213,10 @@ def _augment_candidate(
         components["final_upper_score"] = candidate.get("upper_score")
     candidate["score_components"] = components
     return candidate
+
+
+def _resolve_run_id(context: Any, run_id: Optional[str]) -> str:
+    return str(run_id or getattr(context, "run_id", "") or context.harness.store.current_run_id)
 
 
 def _is_actionable(features: Dict[str, Any], items: List[Dict[str, Any]]) -> bool:

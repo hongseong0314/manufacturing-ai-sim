@@ -111,6 +111,7 @@ class FeatureSnapshot:
     source: str
     decision_state: Dict[str, Any]
     features: Dict[str, Any] = field(default_factory=dict)
+    run_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -136,6 +137,7 @@ class AIRecommendation:
     rule_validation_status: str = "PENDING"
     rule_validation_reasons: List[str] = field(default_factory=list)
     final_command_id: Optional[str] = None
+    run_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -156,6 +158,7 @@ class Event:
     operation_id: Optional[str] = None
     recipe_id: Optional[str] = None
     payload: Dict[str, Any] = field(default_factory=dict)
+    run_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -171,6 +174,7 @@ class MESCommand:
     validated_command: Dict[str, Any] = field(default_factory=dict)
     simulator_actions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     reasons: List[str] = field(default_factory=list)
+    run_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -198,6 +202,7 @@ class RuleValidationResult:
     correlation_id: str = ""
     reasons: List[str] = field(default_factory=list)
     validated_command: Dict[str, Any] = field(default_factory=dict)
+    run_id: str = ""
 
     @property
     def passed(self) -> bool:

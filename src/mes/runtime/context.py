@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 from src.environment.manufacturing_env import ManufacturingEnv
 from src.mes import MESDevelopmentHarness
+from src.mes.recommendations import make_id
 from src.mes.sqlite_store import SQLiteMESStore
 
 
@@ -41,6 +42,10 @@ class MESAPIContext:
     def __init__(self) -> None:
         self.env = build_default_env()
         self.store = SQLiteMESStore(default_db_path())
+        self.store.clear_runtime_state()
+        self.run_id = ""
+        self._run_sequence = len(self.store.runs())
+        self._start_new_run("startup")
         self.harness = MESDevelopmentHarness(config=self.env.config, store=self.store)
         self.autoplay_enabled = False
         self.autoplay_target_stage = "AUTO"
@@ -54,6 +59,7 @@ class MESAPIContext:
     def reset_runtime(self) -> None:
         self.env = build_default_env()
         self.store.clear_runtime_state()
+        self._start_new_run("reset")
         self.autoplay_enabled = False
         self.autoplay_target_stage = "AUTO"
         self.last_generation_time = None
@@ -61,3 +67,21 @@ class MESAPIContext:
         self.last_cycle = None
         self.scenario_snapshots.clear()
         self.experiment_results.clear()
+
+    def _start_new_run(self, reason: str) -> None:
+        self._run_sequence += 1
+        self.run_id = make_id("RUN")
+        self.store.start_run(
+            self.run_id,
+            reason=reason,
+            time=int(self.env.time),
+            metadata={
+                "sequence": self._run_sequence,
+                "config": dict(self.env.config),
+            },
+        )
+        self.store.record_state_snapshot(
+            source=f"runtime_{reason}",
+            decision_state=self.env.get_decision_state(),
+            run_id=self.run_id,
+        )

@@ -14,9 +14,12 @@ def assignment_trace(
     task_uid: Optional[int] = None,
     correlation_id: Optional[str] = None,
     candidate_id: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Resolve one executed assignment back to its layered MES decision chain."""
+    resolved_run_id = _resolve_run_id(context, run_id)
     lookup = {
+        "run_id": resolved_run_id,
         "equipment_id": equipment_id,
         "task_uid": task_uid,
         "correlation_id": correlation_id,
@@ -28,16 +31,19 @@ def assignment_trace(
         task_uid=task_uid,
         correlation_id=correlation_id,
         candidate_id=candidate_id,
+        run_id=resolved_run_id,
     )
     if command is None:
         return _not_found(lookup, "NO_MATCHING_COMMAND")
 
     corr = command.correlation_id
-    recommendations = context.harness.store.recommendations(corr)
+    recommendations = context.harness.store.recommendations(corr, run_id=resolved_run_id)
     by_layer = {recommendation.layer_id: recommendation for recommendation in recommendations}
-    validation = _latest_or_none(context.harness.store.validations(corr))
-    portfolio = candidate_portfolio(context, corr)
-    decision_state = _decision_state_for_trace(context, corr)
+    validation = _latest_or_none(
+        context.harness.store.validations(corr, run_id=resolved_run_id)
+    )
+    portfolio = candidate_portfolio(context, corr, run_id=resolved_run_id)
+    decision_state = _decision_state_for_trace(context, corr, resolved_run_id)
     validated = dict(command.validated_command or {})
     stage = str(validated.get("stage") or _stage_from_equipment(validated.get("equipment_id")) or "").upper()
     task_uids = [int(uid) for uid in validated.get("task_uids", [])]
@@ -51,6 +57,7 @@ def assignment_trace(
         "candidate_id": validated.get("candidate_id"),
         "correlation_id": corr,
         "command_id": command.command_id,
+        "run_id": resolved_run_id,
         "start": start,
         "end": end,
     }
@@ -64,6 +71,7 @@ def assignment_trace(
     }
     return {
         "found": True,
+        "run_id": resolved_run_id,
         "lookup": lookup,
         "assignment": assignment,
         "decision_state": decision_state or {},
@@ -76,9 +84,13 @@ def assignment_trace(
         "raw": {
             "recommendations": [recommendation.to_dict() for recommendation in recommendations],
             "validations": [
-                item.to_dict() for item in context.harness.store.validations(corr)
+                item.to_dict()
+                for item in context.harness.store.validations(corr, run_id=resolved_run_id)
             ],
-            "commands": [item.to_dict() for item in context.harness.store.commands(corr)],
+            "commands": [
+                item.to_dict()
+                for item in context.harness.store.commands(corr, run_id=resolved_run_id)
+            ],
         },
     }
 
@@ -89,8 +101,11 @@ def _find_command(
     task_uid: Optional[int],
     correlation_id: Optional[str],
     candidate_id: Optional[str],
+    run_id: str,
 ) -> Optional[Any]:
-    commands = list(reversed(context.harness.store.commands(correlation_id)))
+    commands = list(
+        reversed(context.harness.store.commands(correlation_id, run_id=run_id))
+    )
     for command in commands:
         validated = dict(command.validated_command or {})
         if candidate_id and str(validated.get("candidate_id")) != str(candidate_id):
@@ -105,8 +120,15 @@ def _find_command(
     return None
 
 
-def _decision_state_for_trace(context: Any, correlation_id: str) -> Dict[str, Any]:
-    snapshots = context.harness.store.feature_snapshots(correlation_id)
+def _decision_state_for_trace(
+    context: Any,
+    correlation_id: str,
+    run_id: str,
+) -> Dict[str, Any]:
+    snapshots = context.harness.store.feature_snapshots(
+        correlation_id,
+        run_id=run_id,
+    )
     for preferred_layer in ("L4", "PORTFOLIO", "L3", "L1", "L2"):
         for snapshot in snapshots:
             if snapshot.layer_id == preferred_layer:
@@ -204,6 +226,7 @@ def _not_found(lookup: Dict[str, Any], reason: str) -> Dict[str, Any]:
     return {
         "found": False,
         "reason": reason,
+        "run_id": lookup.get("run_id", ""),
         "lookup": lookup,
         "assignment": {},
         "decision_state": {},
@@ -214,3 +237,7 @@ def _not_found(lookup: Dict[str, Any], reason: str) -> Dict[str, Any]:
         "candidate_portfolio": {},
         "simulator_action": {},
     }
+
+
+def _resolve_run_id(context: Any, run_id: Optional[str]) -> str:
+    return str(run_id or getattr(context, "run_id", "") or context.harness.store.current_run_id)

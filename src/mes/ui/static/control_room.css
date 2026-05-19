@@ -14,6 +14,13 @@
       --orange: #ff832b;
       --red: #da1e28;
       --purple: #8a3ffc;
+      --surface-strong: #ffffff;
+      --surface-raised: #fdfdfd;
+      --focus-ring: #0f62fe;
+      --ai-surface: #f6f2ff;
+      --trace-surface: #edf5ff;
+      --audit-surface: #f4f4f4;
+      --shadow-soft: 0 1px 2px rgba(0, 0, 0, .06);
     }
 
     * { box-sizing: border-box; }
@@ -35,6 +42,8 @@
     .brand { border-bottom: 1px solid var(--border); padding: 8px 4px 18px; }
     .brand strong { display: block; font-size: 18px; font-weight: 650; }
     .brand span { color: var(--muted); font-size: 12px; }
+    .nav-section { margin-top: 16px; }
+    .nav-section:first-of-type { margin-top: 0; }
     .nav-label {
       color: var(--subtle);
       font-size: 11px;
@@ -58,7 +67,15 @@
       color: var(--blue);
       font-weight: 650;
     }
-    .workspace { min-width: 0; padding: 20px; }
+    .page-shell { min-width: 0; }
+    main.page-shell { padding: 20px; }
+    .section-kicker {
+      color: var(--subtle);
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.35;
+      margin: 3px 0 0;
+    }
     .topbar {
       align-items: center;
       display: flex;
@@ -92,11 +109,15 @@
     .button.compact { min-height: 30px; padding: 5px 8px; }
     .layout { display: grid; gap: 16px; }
     .kpis { display: grid; gap: 12px; grid-template-columns: repeat(6, 1fr); }
-    .panel {
+    .panel,
+    #ai-dev-console,
+    #assignment-trace-page,
+    #genealogy-page {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 6px;
       min-width: 0;
+      box-shadow: var(--shadow-soft);
     }
     .panel.active { border-color: var(--blue); }
     .panel-header {
@@ -166,7 +187,19 @@
     }
     td, th { border-bottom: 1px solid var(--border); padding: 8px 10px; white-space: nowrap; }
     td { font-size: 13px; height: 44px; }
-    .table-wrap { overflow-x: auto; }
+    .table-wrap,
+    .table-scroll {
+      max-width: 100%;
+      overflow: auto;
+    }
+    .truncate-id {
+      display: inline-block;
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: bottom;
+      white-space: nowrap;
+    }
     code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
     .chain, .events { display: grid; gap: 10px; padding: 12px; }
     .chain-node { border: 1px solid var(--border); border-left: 4px solid var(--purple); border-radius: 6px; padding: 10px; }
@@ -206,13 +239,24 @@
     body.portfolio-page .layout > section:not(#candidate-portfolio) { display: none; }
     body.portfolio-page #candidate-portfolio { min-height: calc(100vh - 116px); }
     body.portfolio-page .portfolio-table { min-width: 1280px; }
-    .assignment-trace-page { display: none; }
+    #assignment-trace-page { display: none; }
     body.assignment-trace-page-active .layout > section:not(#assignment-trace-page) { display: none; }
     body.assignment-trace-page-active #assignment-trace-page { display: block; min-height: calc(100vh - 116px); }
-    .ai-dev-console { display: none; }
+    #genealogy-page { display: none; }
+    body.genealogy-page-active .layout > section:not(#genealogy-page) { display: none; }
+    body.genealogy-page-active #genealogy-page { display: block; min-height: calc(100vh - 116px); }
+    #ai-dev-console { display: none; }
     body.ai-dev-page .layout > section:not(#ai-dev-console) { display: none; }
     body.ai-dev-page #ai-dev-console { display: block; min-height: calc(100vh - 116px); }
-    .ai-dev-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); padding: 12px; }
+    .inspector-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      padding: 12px;
+    }
+    .ai-dev-inspector-grid {
+      grid-template-columns: minmax(320px, .9fr) minmax(420px, 1.1fr);
+    }
     .ai-dev-wide { grid-column: 1 / -1; }
     .panel-lite { border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
     .compact-header { min-height: 38px; }
@@ -314,11 +358,38 @@
       padding: 7px 8px;
       text-transform: none;
     }
-    .trace-inspector-grid {
+    .genealogy-search-grid {
+      align-items: end;
+      border-bottom: 1px solid var(--border);
       display: grid;
-      gap: 12px;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      grid-template-columns: repeat(6, minmax(0, 1fr)) auto;
       padding: 12px;
+    }
+    .genealogy-search-grid label {
+      color: var(--muted);
+      display: grid;
+      font-size: 11px;
+      font-weight: 650;
+      gap: 5px;
+      text-transform: uppercase;
+    }
+    .genealogy-search-grid input,
+    .genealogy-search-grid select {
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--ink);
+      min-height: 34px;
+      padding: 7px 8px;
+      text-transform: none;
+    }
+    .genealogy-inspector-grid {
+      grid-template-columns: repeat(4, minmax(220px, 1fr));
+    }
+    .genealogy-wide { grid-column: 1 / -1; }
+    .ledger-table { min-width: 1080px; }
+    .trace-inspector-grid {
+      grid-template-columns: minmax(280px, .75fr) minmax(440px, 1.25fr);
     }
     .trace-layer-list {
       display: grid;
@@ -352,6 +423,10 @@
       overflow: auto;
       padding: 12px;
       white-space: pre-wrap;
+    }
+    .raw-json-collapsed {
+      max-height: 220px;
+      overflow: auto;
     }
     .event-row { border-bottom: 1px solid var(--border); display: grid; gap: 10px; grid-template-columns: 96px 1fr auto; padding: 10px 0; }
     .event-row:last-child { border-bottom: 0; }
@@ -459,13 +534,15 @@
       content: "now";
       display: inline-block;
       font-size: 10px;
-      left: -13px;
+      left: 50%;
       line-height: 1.2;
       overflow-wrap: normal;
       padding: 1px 5px;
       position: absolute;
       top: -18px;
+      transform: translateX(-50%);
       white-space: nowrap;
+      writing-mode: horizontal-tb;
       word-break: keep-all;
     }
     .gantt-bar {
@@ -538,7 +615,7 @@
     .point-detail dt { color: var(--subtle); font-size: 11px; text-transform: uppercase; }
     .point-detail dd { font-size: 13px; margin: 0; min-width: 0; overflow-wrap: anywhere; }
     .empty-state { color: var(--muted); padding: 20px; }
-    @media (max-width: 1200px) { .kpis { grid-template-columns: repeat(3, 1fr); } .main-grid, .split-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 1200px) { .kpis { grid-template-columns: repeat(3, 1fr); } .main-grid, .split-grid, .inspector-grid { grid-template-columns: 1fr; } }
     @media (max-width: 1200px) { .stage-detail-grid, .machine-detail-grid { grid-template-columns: 1fr; } .machine-kpi-grid { grid-template-columns: repeat(3, 1fr); } }
     @media (max-width: 900px) { .shell { grid-template-columns: 1fr; } .sidebar { border-bottom: 1px solid var(--border); border-right: 0; } .stage-grid, .flow-board { grid-template-columns: 1fr; } .flow-arrow { display: none; } .topbar { align-items: stretch; flex-direction: column; } .commands { justify-content: flex-start; } }
-    @media (max-width: 640px) { .workspace { padding: 12px; } .kpis, .machine-kpi-grid { grid-template-columns: 1fr; } .event-row { grid-template-columns: 1fr; } }
+    @media (max-width: 640px) { main.page-shell { padding: 12px; } .kpis, .machine-kpi-grid { grid-template-columns: 1fr; } .event-row { grid-template-columns: 1fr; } }

@@ -1,7 +1,7 @@
 # UI Control Room Specification
 
 Status: canonical  
-Last updated: 2026-05-10
+Last updated: 2026-05-15
 
 ## Purpose
 
@@ -17,6 +17,29 @@ AI MES. It must help dispatchers, engineers, and AI developers understand:
 - events and genealogy.
 
 The UI must never imply that AI directly executes equipment commands.
+
+## Product Shell Direction
+
+The UI is now treated as the product shell for a Semiconductor Digital Twin MES.
+The simulator remains the execution backend, but screen structure must scale to
+production adapters, genealogy, operator approval, richer equipment state, and
+future digital twin views.
+
+V1 keeps the current FastAPI + static HTML/CSS/JS delivery model. The product
+foundation work focuses on information architecture, reusable UI primitives,
+and dense-data containment rather than a React/Next migration or decorative
+redesign.
+
+`https://github.com/nexu-io/open-design` is used only as a design-system
+reference for enterprise token discipline and product-console patterns. It is
+not a runtime dependency.
+
+| Group | Screens | Primary question |
+|---|---|---|
+| Operate | Fab Control, Flow & Gantt, Equipment, Machine Detail | Is the fab healthy, and what is running where? |
+| Trace | Decision Chain, Assignment Trace, Genealogy, Candidate Portfolio | Why did this decision, assignment, or state transition happen? |
+| AI Development | AI Dev Console | Which policies, candidates, scores, and experiments explain behavior? |
+| System / Audit | Events | What happened in the execution log? |
 
 ## Visual Source Of Truth
 
@@ -36,6 +59,8 @@ Style:
 - no marketing hero,
 - no decorative gradient blobs,
 - no cards inside cards.
+- Open Design may inform tokens and component primitives, but MES-specific
+  operational clarity wins over any external style preset.
 
 Typography:
 
@@ -133,6 +158,23 @@ Must include:
 - correlation id,
 - event history.
 
+### Digital Twin Genealogy
+
+Shows the execution backbone behind the live state.
+
+Must include:
+
+- task/wafer lookup by simulator task uid,
+- lot/job rollout by lot id,
+- equipment timeline by equipment id,
+- execution ledger by correlation id,
+- best available state snapshot by simulator time,
+- command/event links back to Assignment Trace.
+
+V1 is correlation/event-centered. It synthesizes simulator start/finish events
+from process logs and combines them with persisted MES command and Rule Engine
+events. It is not yet a fully normalized event-sourced reconstruction.
+
 ### Equipment And Recipe Monitor
 
 Shows whether the selected command can actually run.
@@ -193,6 +235,18 @@ Mobile:
 - horizontally scrollable tables,
 - vertical decision chain.
 
+Reusable product primitives:
+
+- `page-shell`: page-level surface and scope.
+- `section-kicker`: short purpose text under section titles.
+- `panel`: bounded information area.
+- `table-scroll`: horizontal/vertical containment for dense tables.
+- `truncate-id`: safe display for long correlation/candidate/command ids.
+- `inspector-grid`: split-pane detail layout.
+- `trace-layer-list`: ordered decision/action timeline.
+- `status`: semantic state chip.
+- `raw-json-collapsed`: contained raw payload inspector.
+
 ## Current UI
 
 Current implementation:
@@ -206,6 +260,12 @@ Current implementation:
 - `src/mes/live_ui.py` remains only as a compatibility import for
   `LIVE_MES_HTML`.
 - UI polls live endpoints.
+- Navigation is grouped by product role: Operate, Trace, AI Development, and
+  System / Audit.
+- `#machine`, `#assignment-trace`, and `#ai-dev` use product-shell semantics and
+  inspector/table primitives so they can grow without one-off layout rules.
+- `/mes#genealogy` shows Digital Twin Genealogy V1 with task, lot, equipment,
+  execution ledger, state-at-time, run selector, and timeline panels.
 - It already shows WIP, equipment, decision chain, events, Gantt, autoplay,
   reset, A/B machine quality detail, C machine packing detail, L3 budget plan,
   selected candidates, L2 annotations, L3/L4 policy ids, and a Candidate
@@ -225,6 +285,8 @@ Current implementation:
   this page with equipment/task/correlation context, and the page shows the
   assignment summary, decision-time state, L4/L3/L1/L2/Rule/Command timeline,
   selected/rejected candidate portfolio rows, simulator action, and raw payload.
+- Assignment Trace can open the related genealogy view so developers can move
+  from "why was this assigned" to "what execution lineage did it create".
 - Candidate Portfolio defaults to the latest actionable portfolio. If the most
   recent cycle is empty, the UI keeps the last actionable portfolio visible and
   exposes the empty reason/diagnostics in the developer console.
@@ -232,7 +294,9 @@ Current implementation:
 Current limitations:
 
 - It only lightly distinguishes L3/L4 group selection from L1 final pack choice.
-- Genealogy view is not implemented.
+- Genealogy V1 now has a run-scoped normalized SQLite index, but it is still a
+  developer diagnostic surface rather than a full event-sourced state
+  reconstruction.
 - Operator approval workflows are not implemented.
 
 ## Required UI Evolution
@@ -272,7 +336,8 @@ Avoid vague phrases:
 | KPI strip | `/api/v1/kpis/fab` | same plus AI KPI |
 | Stage board | `/api/v1/wip`, `/api/v1/equipment` | same |
 | Candidate table | `/api/v2/candidate-portfolio/latest`, `/api/v2/candidate-portfolio/{correlation_id}` | same plus richer drilldown |
-| Assignment trace | `/api/v2/assignment-trace`, `/api/v2/gantt` trace keys | same plus persisted genealogy linkage |
+| Assignment trace | `/api/v2/assignment-trace`, `/api/v2/gantt` trace keys | same plus richer persisted genealogy linkage |
+| Genealogy | `/api/v2/runs`, `/api/v2/ledger-index/{index_name}`, `/api/v2/genealogy/task/{task_uid}`, `/api/v2/genealogy/equipment/{equipment_id}`, `/api/v2/genealogy/lot/{lot_id}`, `/api/v2/execution-ledger/{correlation_id}`, `/api/v2/digital-twin/state-at` | event-sourced reconstruction |
 | AI developer console | `/api/v2/ai-dev/policy-stack`, `/api/v2/ai-dev/decision-cycles`, `/api/v2/ai-dev/candidate-portfolio/{correlation_id}`, `/api/v2/ai-dev/scenarios`, `/api/v2/ai-dev/policy-variants`, `/api/v2/ai-dev/experiments/*` | same plus scenario preset library |
 | Decision chain | `/api/v2/decision-chain/{correlation_id}` | same with portfolio metadata |
 | Rule gate | `/api/v1/rules/validate` | same plus layer consistency reasons |

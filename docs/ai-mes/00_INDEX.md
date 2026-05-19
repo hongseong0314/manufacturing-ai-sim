@@ -1,7 +1,7 @@
 # AI MES Canonical Documentation
 
 Status: canonical working specification
-Last updated: 2026-05-10
+Last updated: 2026-05-15
 Scope: simulator-backed semiconductor AI MES, AI decision architecture, MES
 runtime, APIs, and UI control room.
 
@@ -20,7 +20,8 @@ should start here.
 | 5 | [05_API_CONTRACTS.md](05_API_CONTRACTS.md) | Current and target FastAPI API contracts |
 | 6 | [06_UI_CONTROL_ROOM_SPEC.md](06_UI_CONTROL_ROOM_SPEC.md) | Operational UI spec, visual rules, views, and data bindings |
 | 7 | [07_IMPLEMENTATION_ROADMAP.md](07_IMPLEMENTATION_ROADMAP.md) | Build phases, acceptance criteria, tests, and migration strategy |
-| 8 | [archive/README.md](archive/README.md) | Legacy document map and supersession notes |
+| 8 | [08_PRODUCT_UI_FOUNDATION_V1.md](08_PRODUCT_UI_FOUNDATION_V1.md) | Product UI foundation goals, open-design usage, and frontend acceptance criteria |
+| 9 | [archive/README.md](archive/README.md) | Legacy document map and supersession notes |
 
 ## Decision Summary
 
@@ -91,22 +92,25 @@ Implemented today:
   defaults `L1_FIFO_BASELINE`, `L2_RULE_BASED_APC`,
   `L3_CANDIDATE_PORTFOLIO_RULE`, and `L4_CYCLE_WEIGHT_RULE`.
 - Runtime: `src/mes/runtime/context.py`, `simulation_control.py`,
-  `live_state.py`, `decision_trace.py`, `equipment_detail.py`, and `gantt.py`
-  own API payload generation and simulator lifecycle.
+  `live_state.py`, `decision_trace.py`, `assignment_trace.py`,
+  `genealogy.py`, `equipment_detail.py`, `ai_dev.py`, `experiments.py`, and
+  `gantt.py` own API payload generation and simulator lifecycle.
 - Decision service: `src/mes/services.py` is a facade over
   `src/mes/decision/candidates.py`, `annotations.py`, and
   `simulator_actions.py`.
-- Store: in-memory plus SQLite JSON payload persistence for audit records and
-  runtime entities.
-- API/UI: live simulator-backed MES endpoints and a dense `/mes` control room.
+- Store: in-memory plus SQLite JSON payload persistence and run-scoped
+  normalized ledger indexes for audit records, runtime entities, genealogy,
+  assignments, commands, events, and state snapshots.
+- API/UI: live simulator-backed MES endpoints and a dense `/mes` control room
+  with Candidate Portfolio, Assignment Trace, AI Developer Console, Policy
+  Experiment Runner, Product UI Foundation, and Digital Twin Genealogy V1.
 - Control-room baseline: A has 5 tools with batch size 3 and process time 20;
   B has 3 tools with batch size 2 and process time 8; C has 3 tools with batch
   size 4 and process time 2.
 
 Not yet implemented:
 
-- Full candidate portfolio workbench APIs/views for all selected and unselected
-  alternatives.
+- Event-sourced WIP reconstruction as the primary digital twin state source.
 - Runtime experiment preset controls for balanced/A-bottleneck/B-bottleneck
   scenarios.
 - Production reservation locks, operator approvals, auth/roles, or SECS/GEM.

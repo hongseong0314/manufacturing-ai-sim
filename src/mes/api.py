@@ -32,7 +32,15 @@ from src.mes.runtime.experiments import (
     run_experiment,
 )
 from src.mes.runtime.gantt import gantt_state
+from src.mes.runtime.genealogy import (
+    digital_twin_state_at as build_digital_twin_state_at,
+    equipment_genealogy as build_equipment_genealogy,
+    execution_ledger as build_execution_ledger,
+    lot_genealogy as build_lot_genealogy,
+    task_genealogy as build_task_genealogy,
+)
 from src.mes.runtime.live_state import fab_kpis, live_fab_state, mes_state
+from src.mes.runtime.run_ledger import ledger_index_payload, runs_payload
 from src.mes.runtime.simulation_control import (
     generate_tasks as generate_runtime_tasks,
     ready_stages,
@@ -232,8 +240,11 @@ def run_until(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str,
 
 
 @app.get("/api/v2/decision-chain/{correlation_id}")
-def decision_chain(correlation_id: str) -> Dict[str, Any]:
-    return build_decision_chain(context, correlation_id)
+def decision_chain(
+    correlation_id: str,
+    run_id: Optional[str] = Query(None),
+) -> Dict[str, Any]:
+    return build_decision_chain(context, correlation_id, run_id=run_id)
 
 
 @app.get("/api/v2/candidate-portfolio/latest")
@@ -242,8 +253,11 @@ def candidate_portfolio_latest() -> Dict[str, Any]:
 
 
 @app.get("/api/v2/candidate-portfolio/{correlation_id}")
-def candidate_portfolio(correlation_id: str) -> Dict[str, Any]:
-    return build_candidate_portfolio(context, correlation_id)
+def candidate_portfolio(
+    correlation_id: str,
+    run_id: Optional[str] = Query(None),
+) -> Dict[str, Any]:
+    return build_candidate_portfolio(context, correlation_id, run_id=run_id)
 
 
 @app.get("/api/v2/ai-dev/policy-stack")
@@ -303,6 +317,7 @@ def assignment_trace(
     task_uid: Optional[int] = Query(None),
     correlation_id: Optional[str] = Query(None),
     candidate_id: Optional[str] = Query(None),
+    run_id: Optional[str] = Query(None),
 ) -> Dict[str, Any]:
     return build_assignment_trace(
         context,
@@ -310,7 +325,53 @@ def assignment_trace(
         task_uid=task_uid,
         correlation_id=correlation_id,
         candidate_id=candidate_id,
+        run_id=run_id,
     )
+
+
+@app.get("/api/v2/runs")
+def runs() -> Dict[str, Any]:
+    return runs_payload(context)
+
+
+@app.get("/api/v2/ledger-index/{index_name}")
+def ledger_index(
+    index_name: str,
+    run_id: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
+) -> Dict[str, Any]:
+    try:
+        return ledger_index_payload(context, index_name, run_id=run_id, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/v2/genealogy/task/{task_uid}")
+def genealogy_task(task_uid: int, run_id: Optional[str] = Query(None)) -> Dict[str, Any]:
+    return build_task_genealogy(context, task_uid, run_id=run_id)
+
+
+@app.get("/api/v2/genealogy/equipment/{equipment_id}")
+def genealogy_equipment(equipment_id: str, run_id: Optional[str] = Query(None)) -> Dict[str, Any]:
+    return build_equipment_genealogy(context, equipment_id, run_id=run_id)
+
+
+@app.get("/api/v2/genealogy/lot/{lot_id}")
+def genealogy_lot(lot_id: str, run_id: Optional[str] = Query(None)) -> Dict[str, Any]:
+    return build_lot_genealogy(context, lot_id, run_id=run_id)
+
+
+@app.get("/api/v2/execution-ledger/{correlation_id}")
+def execution_ledger(correlation_id: str, run_id: Optional[str] = Query(None)) -> Dict[str, Any]:
+    return build_execution_ledger(context, correlation_id, run_id=run_id)
+
+
+@app.get("/api/v2/digital-twin/state-at")
+def digital_twin_state_at(
+    time: int = Query(..., ge=0),
+    run_id: Optional[str] = Query(None),
+) -> Dict[str, Any]:
+    return build_digital_twin_state_at(context, time, run_id=run_id)
 
 
 @app.get("/api/v2/equipment/{equipment_id}/detail")

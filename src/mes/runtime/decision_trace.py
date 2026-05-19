@@ -11,48 +11,67 @@ from src.mes.runtime.candidate_portfolio import (
 
 
 def latest_correlation_id(context: Any) -> Optional[str]:
+    run_id = _resolve_run_id(context)
     if context.last_correlation_id:
         return context.last_correlation_id
-    commands = context.harness.store.commands()
+    commands = context.harness.store.commands(run_id=run_id)
     if commands:
         return commands[-1].correlation_id
-    events = context.harness.store.events()
+    events = context.harness.store.events(run_id=run_id)
     if events:
         return events[-1].correlation_id
     return None
 
 
-def decision_chain(context: Any, correlation_id: Optional[str]) -> Dict[str, Any]:
+def decision_chain(
+    context: Any,
+    correlation_id: Optional[str],
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_run_id = run_id or _resolve_run_id(context)
     if not correlation_id:
         return {
             "correlation_id": None,
+            "run_id": resolved_run_id,
             "recommendations": [],
             "events": [],
             "validations": [],
             "commands": [],
             "counts": {"recommendations": 0, "events": 0, "validations": 0, "commands": 0},
         }
-    recommendations = context.harness.store.recommendations(correlation_id)
+    recommendations = context.harness.store.recommendations(
+        correlation_id,
+        run_id=resolved_run_id,
+    )
     layer_order = {layer: index for index, layer in enumerate(("L4", "L3", "L1", "L2"))}
     recommendations = sorted(
         recommendations,
         key=lambda rec: layer_order.get(rec.layer_id, 99),
     )
-    events = context.harness.store.events(correlation_id)
-    validations = context.harness.store.validations(correlation_id)
-    commands = context.harness.store.commands(correlation_id)
+    events = context.harness.store.events(correlation_id, run_id=resolved_run_id)
+    validations = context.harness.store.validations(correlation_id, run_id=resolved_run_id)
+    commands = context.harness.store.commands(correlation_id, run_id=resolved_run_id)
     validation_status = validations[-1].validation_status if validations else "PENDING"
     recommendation_dicts = [item.to_dict() for item in recommendations]
-    portfolio_payload = build_candidate_portfolio(context, correlation_id)
+    portfolio_payload = build_candidate_portfolio(
+        context,
+        correlation_id,
+        run_id=resolved_run_id,
+    )
     return {
         "correlation_id": correlation_id,
+        "run_id": resolved_run_id,
         "recommendations": recommendation_dicts,
         "events": [item.to_dict() for item in events],
         "validations": [item.to_dict() for item in validations],
         "commands": [item.to_dict() for item in commands],
         "traceability": chain_traceability(recommendation_dicts, commands),
         "candidate_portfolio": portfolio_payload,
-        "portfolio_summary": portfolio_summary(context, correlation_id),
+        "portfolio_summary": portfolio_summary(
+            context,
+            correlation_id,
+            run_id=resolved_run_id,
+        ),
         "validation_status": validation_status,
         "counts": {
             "recommendations": len(recommendations),
@@ -61,6 +80,10 @@ def decision_chain(context: Any, correlation_id: Optional[str]) -> Dict[str, Any
             "commands": len(commands),
         },
     }
+
+
+def _resolve_run_id(context: Any) -> str:
+    return str(getattr(context, "run_id", "") or context.harness.store.current_run_id)
 
 
 def chain_traceability(

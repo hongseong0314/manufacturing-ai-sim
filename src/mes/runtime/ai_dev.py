@@ -14,6 +14,7 @@ def policy_stack_payload(context: Any) -> Dict[str, Any]:
     l4 = stack.l4_objective_policy
     return {
         "factory_name": stack.factory_name,
+        "run_id": _resolve_run_id(context),
         "config": config,
         "l1_policy_id": stack.l1_policy_id,
         "l2_policy_id": stack.l2_policy_id,
@@ -56,11 +57,12 @@ def policy_stack_payload(context: Any) -> Dict[str, Any]:
 
 
 def decision_cycles_payload(context: Any, limit: int = 50) -> Dict[str, Any]:
+    run_id = _resolve_run_id(context)
     rows: List[Dict[str, Any]] = []
     seen = set()
     snapshots = [
         snapshot
-        for snapshot in context.harness.store.feature_snapshots()
+        for snapshot in context.harness.store.feature_snapshots(run_id=run_id)
         if snapshot.layer_id == "PORTFOLIO"
     ]
     for snapshot in reversed(snapshots):
@@ -71,16 +73,17 @@ def decision_cycles_payload(context: Any, limit: int = 50) -> Dict[str, Any]:
         rows.append(_decision_cycle_row(context, snapshot))
         if len(rows) >= limit:
             break
-    return {"count": len(rows), "items": rows}
+    return {"run_id": run_id, "count": len(rows), "items": rows}
 
 
 def ai_dev_candidate_portfolio(
     context: Any,
     correlation_id: Optional[str],
 ) -> Dict[str, Any]:
-    payload = candidate_portfolio(context, correlation_id)
-    objective = _recommendation_by_layer(context, correlation_id, "L4")
-    l3 = _recommendation_by_layer(context, correlation_id, "L3")
+    run_id = _resolve_run_id(context)
+    payload = candidate_portfolio(context, correlation_id, run_id=run_id)
+    objective = _recommendation_by_layer(context, correlation_id, "L4", run_id=run_id)
+    l3 = _recommendation_by_layer(context, correlation_id, "L3", run_id=run_id)
     weights = dict((objective or {}).get("recommended_action", {}).get("weights") or {})
     payload["objective_weights"] = weights
     payload["objective_action"] = dict((objective or {}).get("recommended_action") or {})
@@ -95,19 +98,23 @@ def ai_dev_candidate_portfolio(
 
 def _decision_cycle_row(context: Any, snapshot: Any) -> Dict[str, Any]:
     correlation_id = snapshot.correlation_id
-    portfolio = candidate_portfolio(context, correlation_id)
+    portfolio = candidate_portfolio(context, correlation_id, run_id=snapshot.run_id)
     summary = dict(portfolio.get("summary") or {})
-    l4 = _recommendation_by_layer(context, correlation_id, "L4")
-    l3 = _recommendation_by_layer(context, correlation_id, "L3")
+    l4 = _recommendation_by_layer(context, correlation_id, "L4", run_id=snapshot.run_id)
+    l3 = _recommendation_by_layer(context, correlation_id, "L3", run_id=snapshot.run_id)
     l3_action = dict((l3 or {}).get("recommended_action") or {})
-    validations = context.harness.store.validations(correlation_id)
-    commands = context.harness.store.commands(correlation_id)
+    validations = context.harness.store.validations(
+        correlation_id,
+        run_id=snapshot.run_id,
+    )
+    commands = context.harness.store.commands(correlation_id, run_id=snapshot.run_id)
     validation_status = (
         validations[-1].validation_status if validations else "PENDING"
     )
     command_status = commands[-1].status if commands else "NONE"
     return {
         "correlation_id": correlation_id,
+        "run_id": snapshot.run_id,
         "time": snapshot.decision_state.get("time"),
         "objective_id": summary.get("objective_id") or (l4 or {}).get("objective_id"),
         "selected_stage": l3_action.get("selected_stage"),
@@ -126,8 +133,16 @@ def _recommendation_by_layer(
     context: Any,
     correlation_id: Optional[str],
     layer_id: str,
+    run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    for recommendation in context.harness.store.recommendations(correlation_id):
+    for recommendation in context.harness.store.recommendations(
+        correlation_id,
+        run_id=run_id,
+    ):
         if recommendation.layer_id == layer_id:
             return recommendation.to_dict()
     return {}
+
+
+def _resolve_run_id(context: Any) -> str:
+    return str(getattr(context, "run_id", "") or context.harness.store.current_run_id)

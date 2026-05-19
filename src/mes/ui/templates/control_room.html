@@ -14,19 +14,30 @@
         <strong>Semiconductor AI MES</strong>
         <span>Live simulator line</span>
       </div>
-      <div class="nav-label">Operate</div>
-      <a class="nav-item active" href="#fab"><span>Fab Control</span><span id="nav-live">Live</span></a>
-      <a class="nav-item" href="#gantt"><span>Flow & Gantt</span><span id="nav-gantt">-</span></a>
-      <a class="nav-item" href="#chain"><span>Decision Chain</span><span id="nav-chain">-</span></a>
-      <a class="nav-item" href="#candidate-portfolio"><span>Candidate Portfolio</span><span id="nav-portfolio">-</span></a>
-      <a class="nav-item" href="#equipment"><span>Equipment</span><span id="nav-eqp">-</span></a>
-      <a class="nav-item" href="#machine"><span>Machine Detail</span><span id="nav-machine">-</span></a>
-      <div class="nav-label">Trace</div>
-      <a class="nav-item" href="#assignment-trace"><span>Assignment Trace</span><span id="nav-assignment-trace">-</span></a>
-      <a class="nav-item" href="#ai-dev"><span>AI Dev Console</span><span id="nav-ai-dev">-</span></a>
-      <a class="nav-item" href="#events"><span>Events</span><span id="nav-events">-</span></a>
+      <div class="nav-section" data-nav-section="operate">
+        <div class="nav-label">Operate</div>
+        <a class="nav-item active" href="#fab"><span>Fab Control</span><span id="nav-live">Live</span></a>
+        <a class="nav-item" href="#gantt"><span>Flow & Gantt</span><span id="nav-gantt">-</span></a>
+        <a class="nav-item" href="#equipment"><span>Equipment</span><span id="nav-eqp">-</span></a>
+        <a class="nav-item" href="#machine"><span>Machine Detail</span><span id="nav-machine">-</span></a>
+      </div>
+      <div class="nav-section" data-nav-section="trace">
+        <div class="nav-label">Trace</div>
+        <a class="nav-item" href="#chain"><span>Decision Chain</span><span id="nav-chain">-</span></a>
+        <a class="nav-item" href="#assignment-trace"><span>Assignment Trace</span><span id="nav-assignment-trace">-</span></a>
+        <a class="nav-item" href="#genealogy"><span>Genealogy</span><span id="nav-genealogy">-</span></a>
+        <a class="nav-item" href="#candidate-portfolio"><span>Candidate Portfolio</span><span id="nav-portfolio">-</span></a>
+      </div>
+      <div class="nav-section" data-nav-section="ai-development">
+        <div class="nav-label">AI Development</div>
+        <a class="nav-item" href="#ai-dev"><span>AI Dev Console</span><span id="nav-ai-dev">-</span></a>
+      </div>
+      <div class="nav-section" data-nav-section="system-audit">
+        <div class="nav-label">System / Audit</div>
+        <a class="nav-item" href="#events"><span>Events</span><span id="nav-events">-</span></a>
+      </div>
     </aside>
-    <main class="workspace" id="fab">
+    <main class="page-shell operate-shell" id="fab" data-page-purpose="live-state">
       <header class="topbar">
         <div>
           <h1>Fab Control Room</h1>
@@ -141,12 +152,15 @@
             </table>
           </div>
         </section>
-        <section class="panel ai-dev-console" id="ai-dev-console">
+        <section class="page-shell ai-dev-shell" id="ai-dev-console" data-page-purpose="policy-debug">
           <div class="panel-header">
-            <h2>AI Developer Console</h2>
+            <div>
+              <h2>AI Developer Console</h2>
+              <p class="section-kicker">Policy, candidate, score, and replay evidence</p>
+            </div>
             <span id="ai-dev-summary">policy stack · decision cycles · portfolio lab</span>
           </div>
-          <div class="ai-dev-grid">
+          <div class="inspector-grid ai-dev-inspector-grid">
             <div class="panel-lite" id="ai-dev-policy-stack">
               <div class="panel-header compact-header"><h2>Policy Stack</h2><span id="ai-dev-policy-factory">-</span></div>
               <div class="policy-stack-grid" id="ai-dev-policy-stack-body"></div>
@@ -210,9 +224,12 @@
             </div>
           </div>
         </section>
-        <section class="panel assignment-trace-page" id="assignment-trace-page">
+        <section class="page-shell trace-shell" id="assignment-trace-page" data-page-purpose="assignment-evidence">
           <div class="panel-header">
-            <h2>Assignment Trace Inspector</h2>
+            <div>
+              <h2>Assignment Trace Inspector</h2>
+              <p class="section-kicker">State, action, layer, and command evidence for one assignment</p>
+            </div>
             <span id="trace-status">Search by assignment, correlation, or candidate</span>
           </div>
           <div class="trace-search-grid">
@@ -222,7 +239,7 @@
             <label>Candidate ID<input id="trace-candidate-id" placeholder="CAND_..." /></label>
             <button class="button primary" id="trace-find" type="button">Find Trace</button>
           </div>
-          <div class="trace-inspector-grid">
+          <div class="inspector-grid trace-inspector-grid">
             <div class="panel-lite">
               <div class="panel-header compact-header"><h2>Assignment Summary</h2><span id="trace-assignment-title">-</span></div>
               <div class="point-detail" id="trace-assignment-summary"></div>
@@ -245,8 +262,60 @@
               </div>
             </div>
             <div class="panel-lite ai-dev-wide">
-              <div class="panel-header compact-header"><h2>Raw Payload Inspector</h2><span>debug JSON</span></div>
-              <pre class="raw-json" id="trace-raw-payload">{}</pre>
+              <div class="panel-header compact-header">
+                <h2>Raw Payload Inspector</h2>
+                <button class="button compact" id="trace-raw-payload-toggle" type="button">Show full raw JSON</button>
+              </div>
+              <pre class="raw-json raw-json-collapsed" id="trace-raw-payload">{}</pre>
+            </div>
+          </div>
+        </section>
+        <section class="page-shell trace-shell" id="genealogy-page" data-page-purpose="digital-twin-ledger">
+          <div class="panel-header">
+            <div>
+              <h2>Digital Twin Genealogy</h2>
+              <p class="section-kicker">Task, lot, equipment, command, and event lineage over simulator time</p>
+            </div>
+            <span id="genealogy-status">Search task, lot, equipment, correlation, or state time</span>
+          </div>
+          <div class="genealogy-search-grid">
+            <label>Run ID<select id="genealogy-run-id"></select></label>
+            <label>Task UID<input id="genealogy-task-uid" placeholder="0" inputmode="numeric" /></label>
+            <label>Equipment ID<input id="genealogy-equipment-id" placeholder="A_0" /></label>
+            <label>Lot ID<input id="genealogy-lot-id" placeholder="JOB_..." /></label>
+            <label>Correlation ID<input id="genealogy-correlation-id" placeholder="CORR_..." /></label>
+            <label>State Time<input id="genealogy-state-time" placeholder="0" inputmode="numeric" /></label>
+            <button class="button primary" id="genealogy-find" type="button">Load Genealogy</button>
+          </div>
+          <div class="inspector-grid genealogy-inspector-grid">
+            <div class="panel-lite">
+              <div class="panel-header compact-header"><h2>Task Genealogy</h2><span id="genealogy-task-title">-</span></div>
+              <div class="point-detail" id="genealogy-task-summary"></div>
+            </div>
+            <div class="panel-lite">
+              <div class="panel-header compact-header"><h2>Equipment Timeline</h2><span id="genealogy-equipment-title">-</span></div>
+              <div class="point-detail" id="genealogy-equipment-summary"></div>
+            </div>
+            <div class="panel-lite">
+              <div class="panel-header compact-header"><h2>Lot Genealogy</h2><span id="genealogy-lot-title">-</span></div>
+              <div class="point-detail" id="genealogy-lot-summary"></div>
+            </div>
+            <div class="panel-lite">
+              <div class="panel-header compact-header"><h2>State At Time</h2><span id="genealogy-state-title">-</span></div>
+              <div class="point-detail" id="genealogy-state-summary"></div>
+            </div>
+            <div class="panel-lite genealogy-wide">
+              <div class="panel-header compact-header"><h2>Execution Ledger</h2><span id="genealogy-ledger-title">-</span></div>
+              <div class="table-wrap">
+                <table class="ledger-table">
+                  <thead><tr><th>Time</th><th>Event</th><th>Actor</th><th>Equipment</th><th>Tasks</th><th>Command</th></tr></thead>
+                  <tbody id="genealogy-ledger-body"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="panel-lite genealogy-wide">
+              <div class="panel-header compact-header"><h2>Timeline</h2><span id="genealogy-timeline-title">-</span></div>
+              <div class="trace-layer-list" id="genealogy-timeline"></div>
             </div>
           </div>
         </section>
@@ -262,9 +331,12 @@
             <div class="events" id="event-list"></div>
           </div>
         </section>
-        <section class="panel machine-dashboard" id="machine">
+        <section class="page-shell operate-shell panel machine-dashboard" id="machine">
           <div class="panel-header">
-            <h2>Machine Detail</h2>
+            <div>
+              <h2>Machine Detail</h2>
+              <p class="section-kicker">Tool state, quality trend, and process detail</p>
+            </div>
             <div class="header-actions">
               <span id="machine-subtitle">Select an A/B/C machine</span>
               <button class="button" id="machine-back" type="button">Back to equipment</button>

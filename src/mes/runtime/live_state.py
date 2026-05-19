@@ -64,6 +64,7 @@ def stage_summary(context: Any, stage: str, decision_state: Dict[str, Any]) -> D
 
 
 def fab_kpis(context: Any) -> Dict[str, Any]:
+    run_id = getattr(context, "run_id", "") or context.harness.store.current_run_id
     decision_state = context.env.get_decision_state()
     current_mes_state = context.harness.service.decision_state_to_mes(decision_state)
     wip = current_mes_state.get("wip", {})
@@ -87,7 +88,9 @@ def fab_kpis(context: Any) -> Dict[str, Any]:
         stats_b.get("total_reworked", 0)
     )
     yield_proxy = (processed - reworked) / processed if processed else 1.0
-    executed_commands = len(context.harness.store.commands(status="EXECUTED"))
+    executed_commands = len(
+        context.harness.store.commands(status="EXECUTED", run_id=run_id)
+    )
     return {
         "time": decision_state.get("time", 0),
         "total_wip": total_wip,
@@ -102,8 +105,8 @@ def fab_kpis(context: Any) -> Dict[str, Any]:
         "processed": processed,
         "reworked": reworked,
         "executed_commands": executed_commands,
-        "recommendation_count": len(context.harness.store.recommendations()),
-        "event_count": len(context.harness.store.events()),
+        "recommendation_count": len(context.harness.store.recommendations(run_id=run_id)),
+        "event_count": len(context.harness.store.events(run_id=run_id)),
     }
 
 
@@ -119,9 +122,11 @@ def live_fab_state(context: Any) -> Dict[str, Any]:
         for stage in STAGES
         for machine in stages[stage]["machines"]
     ]
+    run_id = getattr(context, "run_id", "") or context.harness.store.current_run_id
     correlation_id = latest_correlation_id(context)
-    recent_events = context.harness.store.events()[-18:]
+    recent_events = context.harness.store.events(run_id=run_id)[-18:]
     return {
+        "run_id": run_id,
         "time": decision_state.get("time", 0),
         "autoplay": {
             "enabled": context.autoplay_enabled,

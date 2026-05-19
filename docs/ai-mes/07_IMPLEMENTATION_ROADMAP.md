@@ -1,7 +1,7 @@
 # Implementation Roadmap
 
 Status: canonical  
-Last updated: 2026-05-10
+Last updated: 2026-05-15
 
 ## Guiding Principle
 
@@ -209,32 +209,55 @@ Acceptance:
 
 ## Phase 8: Persistence And Genealogy
 
+Status: implemented for Digital Twin Genealogy & Execution Ledger V1 and
+Run-Scoped Normalized Ledger Index V1.
+
 Deliverables:
 
-- normalized schema plan,
-- genealogy record creation,
-- event-to-WIP reconstruction design,
-- command/event correlation with simulator process logs.
+- task/wafer genealogy query by simulator task uid,
+- lot/job genealogy rollout,
+- equipment command and simulator event timeline,
+- correlation-level execution ledger,
+- simulator action applied event persistence,
+- decision-state snapshot lookup by simulator time,
+- Assignment Trace to Genealogy UI linkage,
+- durable `run_id` namespace for startup/reset sessions,
+- reset that preserves prior genealogy under prior run ids,
+- normalized SQLite index tables for runs, tasks, lots, assignments,
+  equipment timeline, commands, events, state snapshots, and genealogy edges,
+- direct `/api/v2/ledger-index/{index_name}` developer index query API.
 
 Acceptance:
 
-- command can be traced to objective, group selection, candidate, recipe/APC, QA
-  result, and equipment event,
-- runtime state can be reloaded beyond audit payloads,
-- SQLite path remains usable for MVP.
+- command can be traced to objective, group selection, candidate, recipe/APC,
+  Rule Engine validation, simulator action, post-state, and equipment event,
+- T0/task lookup shows creation, assignment, command, and equipment start/finish
+  lineage,
+- equipment lookup shows the processed task sequence,
+- lot lookup rolls up related task and command ids,
+- runtime state can be inspected at a requested simulator time from available
+  snapshots,
+- SQLite path remains usable for MVP,
+- reused task ids after reset resolve to the current run by default and to
+  historical runs when `run_id` is supplied.
+
+Future deliverables:
+
+- event-sourced WIP reconstruction independent of live simulator state,
+- explicit quality/rework lineage records,
+- durable genealogy queries across process restarts.
 
 ## Next Priorities
 
 Recommended next build order:
 
-1. Scenario preset library and config controls for balanced/A-bottleneck/
+1. Event-sourced WIP reconstruction independent of live simulator state.
+2. Scenario preset library and config controls for balanced/A-bottleneck/
    B-bottleneck/stress experiments.
-2. Duplicate same-cycle reservation locks for multi-command AUTO cycles.
-3. Learning-policy adapter contract for L1/L2/L3/L4 experiment variants.
-4. Persisted assignment trace/genealogy indexes beyond command JSON matching.
-5. Explicit FeatureSnapshot persistence/indexing for every decision cycle.
-6. Lot/wafer genealogy views linking command, equipment, recipe/APC, QA result,
-   and event history.
+3. Duplicate same-cycle reservation locks for multi-command AUTO cycles.
+4. Learning-policy adapter contract for L1/L2/L3/L4 experiment variants.
+5. Richer FeatureSnapshot and state diff indexing for every decision cycle.
+6. Quality/rework lineage records linked to task, recipe/APC, and equipment.
 7. Recipe/APC command endpoints and operator hold/release/approval workflows.
 
 ## Phase 9: Operator Workflow And Production Boundaries
